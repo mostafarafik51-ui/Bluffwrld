@@ -3,6 +3,8 @@ var require =
 {
     // Default load path for js files
     baseUrl : "js/game",
+    // always fetch the current game code instead of a copy the browser cached
+    urlArgs : "v=" + Date.now(),
     shim :
     {
         "threeCore" : { exports : "THREE" },
