@@ -32,6 +32,7 @@ var require =
 
         //game code
         animator : "./utils/animator",
+        bag : "./bag",
         collider : "./physics/collider",
         colors : "./utils/colors",
         debug : "./utils/debug",

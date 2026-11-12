@@ -1,10 +1,10 @@
 'use strict'
 define(["three", "gltfLoader", "dracoLoader", "animator", "collider", "ray",
         "physics", "scene", "camera", "utils", "states", "playerInputHandler",
-        "container", "eventQ", "time", "texture"],
+        "container", "eventQ", "time", "texture", "bag"],
         (THREE, GLTFLoader, dracoLoader, Animator, Collider, Ray, Physics,
         scene, camera, Utils, States, playerInputHandler, container, EventQ,
-        Time, texture) => {
+        Time, texture, Bag) => {
 
     var player =
     {
@@ -168,6 +168,14 @@ define(["three", "gltfLoader", "dracoLoader", "animator", "collider", "ray",
                         obj.frustumCulled = false;
                     }
                 });
+
+                // wear the Bluff sling bag: it follows the upper spine
+                var spine = this.threeObj.getObjectByName("mixamorigSpine2");
+                if (spine)
+                {
+                    this.bag = Bag.create();
+                    spine.add(this.bag);
+                }
 
                 this.initAnimations(gltf.animations);
                 scene.add(this.threeObj);
