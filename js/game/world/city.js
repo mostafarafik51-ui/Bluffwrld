@@ -44,6 +44,12 @@ define(["three", "scene", "physics", "bag", "gltfLoader"], (THREE, scene, Physic
         { name : "OLIVE GREEN",  color : "#6E6B4E" },
         { name : "STONE GREY",   color : "#9A968B" },
         { name : "DUST BEIGE",   color : "#D8CFBE" },
+        // extra colourways for the game world, taken from the paintings in the store
+        { name : "RUG RED",      color : "#A12D26" },
+        { name : "ALPINE BLUE",  color : "#3E6FA3" },
+        { name : "MEADOW",       color : "#6F9A3B" },
+        { name : "SUNSET",       color : "#E8A03A" },
+        { name : "DUSK VIOLET",  color : "#56467F" },
     ];
 
     var City =
@@ -763,8 +769,8 @@ define(["three", "scene", "physics", "bag", "gltfLoader"], (THREE, scene, Physic
                 mats = this.crescent_materials[color] =
                 {
                     fabric : new THREE.MeshStandardMaterial({ map : this.crescent_fabric, color : base, roughness : 0.9, side : THREE.DoubleSide }),
-                    // "concealed discovery orange interior lining"
-                    lining : new THREE.MeshStandardMaterial({ color : new THREE.Color(C.orange).convertSRGBToLinear(), roughness : 0.85, side : THREE.DoubleSide }),
+                    // the inside matches the outside, a shade deeper
+                    lining : new THREE.MeshStandardMaterial({ color : base.clone().multiplyScalar(0.72), roughness : 0.9, side : THREE.DoubleSide }),
                     stitch : new THREE.MeshStandardMaterial({ color : base.clone().multiplyScalar(0.6), roughness : 0.9 }),
                     thread : new THREE.MeshStandardMaterial({ color : new THREE.Color(C.cream).convertSRGBToLinear(), roughness : 0.8 }),
                 };
@@ -890,6 +896,376 @@ define(["three", "scene", "physics", "bag", "gltfLoader"], (THREE, scene, Physic
         },
 
         // ====================================================================
+        //  Art, rugs and trophies: original pieces that give the store some life
+        // ====================================================================
+
+        // every painting is drawn here; `kind` picks one
+        artTexture : function(kind, w, h)
+        {
+            var R = (seed) => { var x = Math.sin(seed * 127.1 + 11.7) * 43758.5453; return x - Math.floor(x); };
+            return this.drawnTexture(w, h, (ctx, W, H, img) =>
+            {
+                var sky = (stops) =>
+                {
+                    var g = ctx.createLinearGradient(0, 0, 0, H);
+                    stops.forEach((s) => g.addColorStop(s[0], s[1]));
+                    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+                };
+                var ridge = (base, amp, color, seed, snow) =>
+                {
+                    ctx.fillStyle = color;
+                    ctx.beginPath(); ctx.moveTo(0, H);
+                    var pts = [];
+                    for (var i = 0; i <= 24; i++)
+                    {
+                        var x = i / 24 * W;
+                        var y = H * base - amp * H * (0.5 + 0.5 * Math.sin(i * 0.9 + seed) * Math.cos(i * 0.37 + seed * 2)) - R(i + seed * 9) * amp * H * 0.35;
+                        pts.push([x, y]); ctx.lineTo(x, y);
+                    }
+                    ctx.lineTo(W, H); ctx.fill();
+                    if (snow)
+                    {
+                        ctx.fillStyle = snow;
+                        for (var k = 1; k < pts.length - 1; k++)
+                        {
+                            if (pts[k][1] < pts[k - 1][1] && pts[k][1] < pts[k + 1][1])
+                            {
+                                ctx.beginPath(); ctx.moveTo(pts[k][0], pts[k][1]);
+                                ctx.lineTo(pts[k][0] - W * 0.035, pts[k][1] + H * 0.07); ctx.lineTo(pts[k][0] - W * 0.008, pts[k][1] + H * 0.05);
+                                ctx.lineTo(pts[k][0] + W * 0.012, pts[k][1] + H * 0.085); ctx.lineTo(pts[k][0] + W * 0.04, pts[k][1] + H * 0.06);
+                                ctx.fill();
+                            }
+                        }
+                    }
+                };
+                var clouds = (n, y0, y1, color) =>
+                {
+                    ctx.fillStyle = color;
+                    for (var c = 0; c < n; c++)
+                    {
+                        var cx = R(c + 3) * W, cy = H * (y0 + R(c + 40) * (y1 - y0));
+                        for (var b = 0; b < 6; b++)
+                        {
+                            ctx.beginPath(); ctx.ellipse(cx + (b - 3) * W * 0.035, cy + R(c * 7 + b) * H * 0.02, W * 0.06, H * 0.028, 0, 0, Math.PI * 2); ctx.fill();
+                        }
+                    }
+                };
+
+                if (kind == "meadow")
+                {
+                    sky([[0, "#2f6fd0"], [0.6, "#8fc1f0"]]);
+                    clouds(5, 0.05, 0.3, "rgba(255,255,255,0.9)");
+                    ridge(0.56, 0.2, "#dfe9f5", 1.3, "#ffffff");
+                    ridge(0.62, 0.1, "#7f93ad", 4.1);
+                    // sloping meadow with flowers
+                    ctx.fillStyle = "#4f8a2f";
+                    ctx.beginPath(); ctx.moveTo(0, H * 0.78); ctx.lineTo(W, H * 0.5); ctx.lineTo(W, H); ctx.lineTo(0, H); ctx.fill();
+                    for (var f = 0; f < 900; f++)
+                    {
+                        var fx = R(f) * W, fy = H * (0.5 + R(f + 500) * 0.5);
+                        if (fy < H * 0.78 - fx / W * H * 0.28) continue;
+                        ctx.fillStyle = f % 5 == 0 ? "#2f6b22" : "#f4d63a";
+                        ctx.fillRect(fx, fy, 3 + (fy / H) * 3, 3 + (fy / H) * 3);
+                    }
+                    // someone lying in the grass, arms out
+                    ctx.save(); ctx.translate(W * 0.52, H * 0.78); ctx.rotate(-0.28);
+                    ctx.fillStyle = "#3b4350"; ctx.fillRect(-W * 0.035, -H * 0.01, W * 0.03, H * 0.12); ctx.fillRect(W * 0.005, -H * 0.01, W * 0.03, H * 0.12);
+                    ctx.fillStyle = "#e9edf0"; ctx.fillRect(-W * 0.045, -H * 0.1, W * 0.09, H * 0.1); ctx.fillRect(-W * 0.14, -H * 0.085, W * 0.28, H * 0.028);
+                    ctx.fillStyle = "#c79a78"; ctx.beginPath(); ctx.arc(0, -H * 0.125, W * 0.028, 0, Math.PI * 2); ctx.fill();
+                    ctx.restore();
+                }
+                else if (kind == "road")
+                {
+                    sky([[0, "#1f66c9"], [0.5, "#6fa6e6"], [0.62, "#f0b27a"]]);
+                    ridge(0.64, 0.07, "#8a4a52", 2.2);
+                    ctx.fillStyle = "#c98f63"; ctx.fillRect(0, H * 0.64, W, H);
+                    // road to the horizon
+                    ctx.fillStyle = "#6b5a55";
+                    ctx.beginPath(); ctx.moveTo(W * 0.49, H * 0.64); ctx.lineTo(W * 0.51, H * 0.64); ctx.lineTo(W * 0.8, H); ctx.lineTo(W * 0.2, H); ctx.fill();
+                    ctx.fillStyle = "#f2e3b0";
+                    for (var d = 0; d < 7; d++) { var t = d / 7, yy = H * (0.66 + t * t * 0.34); ctx.fillRect(W * 0.5 - 2 - t * 5, yy, 4 + t * 10, H * 0.012 + t * H * 0.03); }
+                    // rear-view mirror holding a wildfire sunset
+                    ctx.fillStyle = "#0e0c0a"; ctx.fillRect(W * 0.47, 0, W * 0.06, H * 0.1);
+                    var mx = W * 0.12, my = H * 0.09, mw = W * 0.76, mh = H * 0.2;
+                    ctx.beginPath(); ctx.ellipse(mx + mw / 2, my + mh / 2, mw / 2, mh / 2, 0, 0, Math.PI * 2); ctx.fill();
+                    var g2 = ctx.createLinearGradient(0, my, 0, my + mh);
+                    g2.addColorStop(0, "#3a1c12"); g2.addColorStop(0.45, "#f0892a"); g2.addColorStop(0.7, "#ffcf5a"); g2.addColorStop(1, "#2a1410");
+                    ctx.fillStyle = g2;
+                    ctx.beginPath(); ctx.ellipse(mx + mw / 2, my + mh / 2, mw / 2 - W * 0.02, mh / 2 - H * 0.018, 0, 0, Math.PI * 2); ctx.fill();
+                    ctx.fillStyle = "#17335e"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+                    ctx.font = Math.round(H * 0.05) + "px " + FONT_MONO;
+                    ["loud", "is a", "bluff"].forEach((word, i) => ctx.fillText(word, W * (0.2 + i * 0.3), H * 0.42));
+                }
+                else if (kind == "arches")
+                {
+                    sky([[0, "#1b1740"], [0.55, "#4a3f8f"], [0.8, "#c9963f"]]);
+                    // city lights across the water
+                    for (var l = 0; l < 160; l++) { ctx.fillStyle = "rgba(255,210,120," + (0.4 + R(l) * 0.6) + ")"; ctx.fillRect(R(l + 9) * W, H * (0.62 + R(l + 77) * 0.12), 3, 3); }
+                    ctx.fillStyle = "#e9c36a"; ctx.fillRect(W * 0.43, H * 0.52, W * 0.14, H * 0.12);
+                    ctx.beginPath(); ctx.moveTo(W * 0.5, H * 0.4); ctx.lineTo(W * 0.56, H * 0.52); ctx.lineTo(W * 0.44, H * 0.52); ctx.fill();
+                    // stone arcade in front
+                    ctx.fillStyle = "#6f6248";
+                    ctx.fillRect(0, 0, W, H * 0.16); ctx.fillRect(0, H * 0.82, W, H * 0.18);
+                    [0, 0.31, 0.62, 0.93].forEach((px) => ctx.fillRect(W * px, 0, W * 0.075, H));
+                    ctx.fillStyle = "#6f6248";
+                    [[0.075, 0.31], [0.385, 0.62], [0.695, 0.93]].forEach((a) =>
+                    {
+                        var x0 = W * a[0], x1 = W * a[1], r = (x1 - x0) / 2;
+                        ctx.beginPath(); ctx.rect(x0, 0, x1 - x0, H * 0.16 + r);
+                        ctx.arc(x0 + r, H * 0.16 + r, r, Math.PI, 0, false);
+                        ctx.fill("evenodd");
+                    });
+                    ctx.fillStyle = "#57492f";
+                    [0, 0.31, 0.62, 0.93].forEach((px) => { ctx.fillRect(W * px - 4, H * 0.3, W * 0.075 + 8, H * 0.03); ctx.fillRect(W * px - 4, H * 0.8, W * 0.075 + 8, H * 0.03); });
+                    // a figure watching, bag across the back
+                    ctx.fillStyle = "#15131c";
+                    ctx.beginPath(); ctx.arc(W * 0.8, H * 0.6, W * 0.035, 0, Math.PI * 2); ctx.fill();
+                    ctx.fillRect(W * 0.755, H * 0.64, W * 0.09, H * 0.2);
+                    ctx.fillStyle = C.beige; ctx.beginPath(); ctx.ellipse(W * 0.79, H * 0.74, W * 0.03, H * 0.06, 0.4, 0, Math.PI * 2); ctx.fill();
+                }
+                else if (kind == "volcano")
+                {
+                    sky([[0, "#2b3a5a"], [0.45, "#b9826a"], [0.7, "#e8c08a"]]);
+                    ridge(0.6, 0.3, "#5a4a52", 0.2, "#f3e9dc");
+                    clouds(4, 0.4, 0.55, "rgba(240,205,170,0.75)");
+                    ctx.fillStyle = "#3a2a1c"; ctx.fillRect(0, H * 0.68, W, H);
+                    ctx.fillStyle = "#b5651f"; ctx.fillRect(0, H * 0.68, W, H * 0.03);
+                    // herd on the plain, two herders
+                    for (var s = 0; s < 46; s++) { ctx.fillStyle = s % 3 ? "#d9843a" : "#8a4a22"; ctx.beginPath(); ctx.ellipse(R(s) * W, H * (0.8 + R(s + 30) * 0.14), W * 0.03, H * 0.016, 0, 0, Math.PI * 2); ctx.fill(); }
+                    [[0.56, "#1f6f5a"], [0.63, "#a12d26"]].forEach((p) =>
+                    {
+                        ctx.fillStyle = p[1]; ctx.fillRect(W * p[0], H * 0.7, W * 0.035, H * 0.09);
+                        ctx.fillStyle = "#2a1c12"; ctx.beginPath(); ctx.arc(W * (p[0] + 0.0175), H * 0.69, W * 0.016, 0, Math.PI * 2); ctx.fill();
+                    });
+                }
+                else if (kind == "glyphs")
+                {
+                    ctx.fillStyle = "#0e0d0b"; ctx.fillRect(0, 0, W, H);
+                    for (var n = 0; n < 2500; n++) { ctx.fillStyle = "rgba(255,255,255," + R(n) * 0.12 + ")"; ctx.fillRect(R(n + 1) * W, R(n + 2) * H, 2, 2); }
+                    // hand-cut blob marks on a grid, the Bluff mark among them
+                    ctx.fillStyle = C.cream; ctx.strokeStyle = C.cream; ctx.lineCap = "round"; ctx.lineJoin = "round";
+                    for (var gy = 0; gy < 3; gy++) for (var gx = 0; gx < 2; gx++)
+                    {
+                        var cx0 = W * (0.27 + gx * 0.46), cy0 = H * (0.2 + gy * 0.3), id = gy * 2 + gx, rr = W * 0.13;
+                        if (id == 3 && img) { this.drawLogo(ctx, img, cx0 - rr * 1.25, cy0 - rr * 1.25, rr * 2.5, C.orange); continue; }
+                        ctx.lineWidth = rr * 0.42;
+                        ctx.beginPath();
+                        for (var a = 0; a <= 5; a++)
+                        {
+                            var ang = a / 5 * Math.PI * 2 + id, r2 = rr * (0.35 + R(id * 13 + a) * 0.75);
+                            var bx = cx0 + Math.cos(ang * (1 + id % 2)) * r2, by2 = cy0 + Math.sin(ang) * r2;
+                            if (a == 0) ctx.moveTo(bx, by2); else ctx.lineTo(bx, by2);
+                        }
+                        ctx.stroke();
+                        ctx.beginPath(); ctx.arc(cx0 + rr * 0.2 * Math.cos(id), cy0 - rr * 0.9, rr * 0.2, 0, Math.PI * 2); ctx.fill();
+                    }
+                    ctx.strokeStyle = "rgba(232,227,216,0.35)"; ctx.lineWidth = 2;
+                    ctx.strokeRect(W * 0.04, H * 0.035, W * 0.92, H * 0.93);
+                    ctx.beginPath(); ctx.moveTo(W * 0.5, H * 0.035); ctx.lineTo(W * 0.5, H * 0.965);
+                    ctx.moveTo(W * 0.04, H * 0.35); ctx.lineTo(W * 0.96, H * 0.35); ctx.moveTo(W * 0.04, H * 0.65); ctx.lineTo(W * 0.96, H * 0.65); ctx.stroke();
+                }
+                else if (kind == "mark")
+                {
+                    // the Bluff mark, loud for once
+                    ctx.fillStyle = "#f1ece0"; ctx.fillRect(0, 0, W, H);
+                    if (img)
+                    {
+                        this.drawLogo(ctx, img, W * 0.1 + 10, H * 0.5 - W * 0.4 + 10, W * 0.8, "#0e0d0b");
+                        this.drawLogo(ctx, img, W * 0.1, H * 0.5 - W * 0.4, W * 0.8, C.orange);
+                    }
+                    ctx.fillStyle = "#0e0d0b"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+                    ctx.font = "600 " + Math.round(H * 0.035) + "px " + FONT_MONO;
+                    ctx.fillText("On mute.", W * 0.08, H * 0.93);
+                }
+                else
+                {
+                    // portraits: flat, quiet, each wearing the bag
+                    var P = { p1 : ["#a12d26", "#8d5b3e", "#15110e", "#e8e3d8", C.washed], p2 : ["#3e6fa3", "#c79a78", "#5a3a22", "#6E6B4E", C.clay],
+                              p3 : ["#e8a03a", "#5c3a28", "#0e0c0a", "#12110F", C.beige], p4 : ["#56467f", "#d9b08c", "#b9b3a6", "#9A968B", C.orange] }[kind] || ["#6f9a3b", "#a8734f", "#1a1512", "#e8e3d8", C.washed];
+                    ctx.fillStyle = P[0]; ctx.fillRect(0, 0, W, H);
+                    for (var q = 0; q < 1800; q++) { ctx.fillStyle = "rgba(0,0,0," + R(q) * 0.08 + ")"; ctx.fillRect(R(q + 5) * W, R(q + 6) * H, 3, 3); }
+                    // shoulders
+                    ctx.fillStyle = P[3];
+                    ctx.beginPath(); ctx.moveTo(W * 0.08, H); ctx.quadraticCurveTo(W * 0.1, H * 0.66, W * 0.38, H * 0.62); ctx.lineTo(W * 0.62, H * 0.62);
+                    ctx.quadraticCurveTo(W * 0.9, H * 0.66, W * 0.92, H); ctx.fill();
+                    // strap across the chest
+                    ctx.strokeStyle = P[4]; ctx.lineWidth = W * 0.075; ctx.beginPath(); ctx.moveTo(W * 0.3, H * 0.63); ctx.lineTo(W * 0.78, H); ctx.stroke();
+                    // neck, head, hair
+                    ctx.fillStyle = P[1]; ctx.fillRect(W * 0.43, H * 0.5, W * 0.14, H * 0.14);
+                    ctx.beginPath(); ctx.ellipse(W * 0.5, H * 0.36, W * 0.17, H * 0.19, 0, 0, Math.PI * 2); ctx.fill();
+                    ctx.fillStyle = P[2];
+                    ctx.beginPath(); ctx.ellipse(W * 0.5, H * 0.25, W * 0.19, H * 0.11, 0, Math.PI, Math.PI * 2); ctx.fill();
+                    ctx.fillRect(W * 0.31, H * 0.24, W * 0.05, H * 0.1); ctx.fillRect(W * 0.64, H * 0.24, W * 0.05, H * 0.1);
+                    // sunglasses and a flat mouth: nothing to prove
+                    ctx.fillStyle = "#0e0c0a";
+                    ctx.fillRect(W * 0.36, H * 0.33, W * 0.12, H * 0.045); ctx.fillRect(W * 0.52, H * 0.33, W * 0.12, H * 0.045); ctx.fillRect(W * 0.47, H * 0.345, W * 0.06, H * 0.012);
+                    ctx.fillRect(W * 0.45, H * 0.455, W * 0.1, H * 0.01);
+                }
+                // light canvas grain over everything
+                for (var z = 0; z < 1200; z++) { ctx.fillStyle = "rgba(255,255,255," + R(z + 900) * 0.05 + ")"; ctx.fillRect(R(z + 901) * W, R(z + 902) * H, 2, 2); }
+            });
+        },
+
+        // a painting in a frame on a wall. (x, y, z) is its centre, phi the way it faces.
+        framed : function(kind, w, h, x, y, z, phi, frame)
+        {
+            var nx = Math.sin(phi), ny = -Math.cos(phi), b = 0.14;
+            var fm = frame == "black" ? this.brand("#0e0d0b", { roughness : 0.5 }) : this.gold();
+            var back = this.box(w + 2 * b, 0.1, h + 2 * b, x + nx * 0.05, y + ny * 0.05, z - h / 2 - b, fm, false, phi);
+            this.wallPlane(w, h, new THREE.MeshBasicMaterial({ map : this.artTexture(kind, 384, Math.round(384 * h / w)) }), x + nx * 0.11, y + ny * 0.11, z, phi);
+            return back;
+        },
+
+        gold : function()
+        {
+            if (!this.gold_material)
+            {
+                this.gold_material = new THREE.MeshStandardMaterial(
+                {
+                    color : new THREE.Color("#d9a92e").convertSRGBToLinear(), metalness : 0.55, roughness : 0.3,
+                    emissive : new THREE.Color("#5a3d08").convertSRGBToLinear(),
+                });
+            }
+            return this.gold_material;
+        },
+
+        // a cup on a dark base, `size` plan units tall, standing at (x, y, z)
+        trophy : function(x, y, z, size, style)
+        {
+            var g = new THREE.Group();
+            var pts;
+            if (style == 1) pts = [[0.0, 0.0], [0.2, 0.0], [0.2, 0.04], [0.06, 0.1], [0.05, 0.36], [0.12, 0.42], [0.3, 0.6], [0.34, 0.9], [0.3, 0.92], [0.0, 0.62]];
+            else if (style == 2) pts = [[0.0, 0.0], [0.24, 0.0], [0.22, 0.06], [0.08, 0.12], [0.07, 0.3], [0.26, 0.4], [0.3, 0.75], [0.2, 0.95], [0.0, 0.96]];
+            else pts = [[0.0, 0.0], [0.22, 0.0], [0.22, 0.05], [0.07, 0.1], [0.05, 0.4], [0.16, 0.46], [0.36, 0.72], [0.4, 0.98], [0.36, 1.0], [0.0, 0.7]];
+            var cup = new THREE.Mesh(new THREE.LatheBufferGeometry(pts.map((p) => new THREE.Vector2(p[0], p[1])), 24), this.gold());
+            cup.rotation.x = Math.PI / 2;                 // lathe axis is Y: stand it on Z
+            cup.material.side = THREE.DoubleSide;
+            cup.position.z = 0.22;
+            g.add(cup);
+            // handles
+            [-1, 1].forEach((s) =>
+            {
+                var handle = new THREE.Mesh(new THREE.TorusBufferGeometry(0.16, 0.035, 8, 16, Math.PI), this.gold());
+                handle.rotation.set(Math.PI / 2, 0, s > 0 ? -Math.PI / 2 : Math.PI / 2);
+                handle.position.set(s * 0.33, 0, 0.22 + 0.78);
+                if (style != 2) g.add(handle);
+            });
+            var base = new THREE.Mesh(new THREE.BoxBufferGeometry(0.5, 0.5, 0.22), this.brand("#0e0d0b", { roughness : 0.4 }));
+            base.position.z = 0.11;
+            g.add(base);
+            var plate = new THREE.Mesh(new THREE.PlaneBufferGeometry(0.36, 0.1), this.glow(C.orange));
+            plate.quaternion.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+            plate.position.set(0, -0.255, 0.11);
+            g.add(plate);
+            g.position.set(x, y, z);
+            g.scale.setScalar(size / 1.22);
+            this.group.add(g);
+            return g;
+        },
+
+        // woven rug, drawn as one quarter and mirrored
+        rugTexture : function(palette)
+        {
+            return this.drawnTexture(384, 576, (ctx, W, H) =>
+            {
+                var R = (seed) => { var x = Math.sin(seed * 91.3 + 3.1) * 43758.5453; return x - Math.floor(x); };
+                var q = this.canvas(W / 2, H / 2), c = q.getContext("2d"), w = W / 2, h = H / 2;
+                c.fillStyle = palette[0]; c.fillRect(0, 0, w, h);
+                // borders
+                [[0, palette[1]], [10, palette[2]], [16, palette[0]], [30, palette[3]], [34, palette[1]]].forEach((b) => { c.fillStyle = b[1]; c.fillRect(b[0], b[0], w, h); });
+                c.fillStyle = palette[0]; c.fillRect(40, 40, w, h);
+                // border flowers
+                for (var i = 0; i < 16; i++) { c.fillStyle = i % 2 ? palette[3] : palette[2]; c.fillRect(20 + i * 12, 20, 6, 6); c.fillRect(20, 20 + i * 18, 6, 6); }
+                // field of small motifs
+                for (var n = 0; n < 240; n++)
+                {
+                    var x = 44 + R(n) * (w - 44), y = 44 + R(n + 400) * (h - 44), s = 3 + R(n + 800) * 6;
+                    c.fillStyle = [palette[1], palette[2], palette[3]][n % 3];
+                    c.save(); c.translate(x, y); c.rotate(Math.PI / 4); c.fillRect(-s / 2, -s / 2, s, s); c.restore();
+                }
+                // medallion at the centre of the rug (bottom-right of the quarter)
+                [[0.62, palette[1]], [0.5, palette[2]], [0.36, palette[0]], [0.22, palette[3]], [0.1, palette[1]]].forEach((m) =>
+                {
+                    c.fillStyle = m[1];
+                    c.beginPath(); c.moveTo(w, h - h * m[0]); c.lineTo(w - w * m[0] * 0.9, h); c.lineTo(w, h); c.fill();
+                });
+                // mirror into all four quarters
+                ctx.drawImage(q, 0, 0);
+                ctx.save(); ctx.translate(W, 0); ctx.scale(-1, 1); ctx.drawImage(q, 0, 0); ctx.restore();
+                ctx.save(); ctx.translate(0, H); ctx.scale(1, -1); ctx.drawImage(q, 0, 0); ctx.restore();
+                ctx.save(); ctx.translate(W, H); ctx.scale(-1, -1); ctx.drawImage(q, 0, 0); ctx.restore();
+                // worn, hand-knotted look
+                for (var k = 0; k < 5000; k++) { ctx.fillStyle = "rgba(240,230,210," + R(k + 77) * 0.16 + ")"; ctx.fillRect(R(k + 78) * W, R(k + 79) * H, 2, 2); }
+            });
+        },
+
+        rug : function(x, y, w, d, palette, z)
+        {
+            var mesh = this.floorPlane(w, d, new THREE.MeshStandardMaterial({ map : this.rugTexture(palette), roughness : 1.0 }), x, y, z);
+            return mesh;
+        },
+
+        plant : function(x, y, size)
+        {
+            this.box(0.7 * size, 0.7 * size, 0.7 * size, x, y, DECK_Z, this.brand(C.clay, { roughness : 0.8 }), true);
+            for (var i = 0; i < 7; i++)
+            {
+                var leaf = new THREE.Mesh(new THREE.ConeBufferGeometry(0.16 * size, 1.5 * size, 6), this.brand(i % 2 ? "#2f6b3a" : "#3f8a45"));
+                leaf.rotation.set(Math.PI / 2 + Math.sin(i * 2.1) * 0.45, 0, i * 0.9);
+                leaf.position.set(x + Math.cos(i * 0.9) * 0.18 * size, y + Math.sin(i * 0.9) * 0.18 * size, DECK_Z + (0.7 + 0.7) * size);
+                this.group.add(leaf);
+            }
+        },
+
+        // paintings, portraits, trophies, rugs and plants inside the store
+        buildStoreLife : function(cx, cy, x0, x1, fy, by, z0, t)
+        {
+            var S = 0, E = -Math.PI / 2, W = Math.PI / 2;      // facing of things on the back / east / west walls
+            var back = by - t - 0.03, east = x1 - t - 0.03, west = x0 + t + 0.03;
+
+            // rugs: a red one under the centrepiece, a blue one in the lounge
+            this.rug(cx, cy - 1, 7.5, 10.5, ["#a12d26", "#efe3cc", "#1f3a5f", "#d9a92e"], z0 + 0.06);
+            this.rug(cx - 9, by - 5.4, 6.5, 4.4, ["#1f3a5f", "#efe3cc", "#a12d26", "#d9a92e"], z0 + 0.06);
+
+            // back wall, left of the logo: a salon hang of portraits and landscapes
+            this.framed("meadow", 3.6, 2.6, cx - 12.4, back, z0 + 7.2, S);
+            this.framed("p1", 1.7, 2.2, cx - 14.2, back, z0 + 4.1, S);
+            this.framed("p2", 1.7, 2.2, cx - 11.9, back, z0 + 4.1, S, "black");
+            this.framed("glyphs", 2.0, 3.0, cx - 8.2, back, z0 + 6.6, S, "black");
+            this.framed("p3", 1.7, 2.2, cx - 9.4, back, z0 + 3.4, S);
+            this.framed("arches", 2.6, 2.0, cx - 6.9, back, z0 + 3.5, S);
+            // back wall, right of the logo
+            this.framed("road", 2.6, 3.4, cx + 8.3, back, z0 + 6.8, S, "black");
+            this.framed("volcano", 3.8, 2.6, cx + 12.6, back, z0 + 7.4, S);
+            this.framed("p4", 1.7, 2.2, cx + 11.3, back, z0 + 4.4, S);
+            this.framed("mark", 1.9, 2.4, cx + 14.0, back, z0 + 4.3, S, "black");
+
+            // trophy cabinet under them
+            var tx = cx + 12.2, ty = by - t - 0.75;
+            this.box(6.2, 1.1, 1.0, tx, ty, z0, this.brand("#0e0d0b", { roughness : 0.4 }), true);
+            this.box(6.4, 1.3, 0.07, tx, ty, z0 + 1.0, this.gold(), false);
+            [[-2.3, 1.25, 0], [-1.15, 0.95, 1], [0, 1.6, 0], [1.15, 0.95, 2], [2.3, 1.25, 1]].forEach((p) => this.trophy(tx + p[0], ty, z0 + 1.07, p[1], p[2]));
+            this.wallPlane(6.0, 0.34, this.textMaterial("MONDAY SURVIVOR  /  QUIETEST IN THE ROOM  /  BLUFF RUN", { fg : C.orange, mono : true, w : 1024, h : 64, size : 0.6 }), tx, ty - 0.56, z0 + 0.5, 0);
+
+            // east wall, either side of the campaign poster
+            this.framed("arches", 3.2, 2.4, east, fy + 3.6, z0 + 6.6, E);
+            this.framed("p2", 1.8, 2.3, east, fy + 3.6, z0 + 9.6, E, "black");
+            this.framed("meadow", 3.4, 2.5, east, by - 5.2, z0 + 6.4, E, "black");
+            this.framed("p1", 1.8, 2.3, east, by - 5.2, z0 + 9.5, E);
+            // west wall, above the bags
+            this.framed("volcano", 4.2, 2.8, west, fy + 4.6, z0 + 8.6, W);
+            this.framed("road", 2.4, 3.1, west, fy + 19.6, z0 + 8.4, W, "black");
+            this.framed("p3", 1.8, 2.3, west, fy + 16.6, z0 + 8.2, W);
+            this.framed("p4", 1.8, 2.3, west, fy + 7.9, z0 + 11.4, W, "black");
+
+            // plants
+            this.plant(x0 + 2.0, fy + 1.7, 1.0);
+            this.plant(x1 - 2.0, fy + 1.7, 1.0);
+            this.plant(cx - 13.2, by - 2.0, 1.2);
+            this.plant(cx + 5.6, by - 1.9, 0.9);
+        },
+
+        // ====================================================================
         //  Bluff store: the flagship at the top of the main street. You can walk in.
         // ====================================================================
 
@@ -1008,12 +1384,7 @@ define(["three", "scene", "physics", "bag", "gltfLoader"], (THREE, scene, Physic
 
             // orange runner from the plaza to the centrepiece
             this.floorPlane(door - 0.6, 8.5, this.brand(C.orange, { roughness : 0.95 }), cx, fy + 4.4, z0 + 0.05);
-            var rug = new THREE.Mesh(new THREE.CircleBufferGeometry(3.6, 48), this.brand(C.hairline, { roughness : 0.95 }));
-            rug.position.set(cx, cy - 1, z0 + 0.06);
-            this.group.add(rug);
-            var rug_ring = new THREE.Mesh(new THREE.RingBufferGeometry(3.6, 3.75, 64), this.glow(C.orange));
-            rug_ring.position.set(cx, cy - 1, z0 + 0.065);
-            this.group.add(rug_ring);
+this.buildStoreLife(cx, cy, x0, x1, fy, by, z0, t);
 
             // centrepiece: tall glass case with a turning bag
             this.vitrine(cx, cy - 1, C.olive, { size : 1.9, plinth : 0.85, tall : 2.5, base : C.washed, spin : true });
@@ -1024,7 +1395,7 @@ define(["three", "scene", "physics", "bag", "gltfLoader"], (THREE, scene, Physic
             // west wall: bags hanging on brass rails in lit niches, one colourway each
             for (var i = 0; i < 8; i++)
             {
-                var bc = BAG_COLOURS[i % BAG_COLOURS.length];
+                var bc = BAG_COLOURS[[0, 5, 1, 6, 2, 8, 3, 9][i]];
                 var y = fy + 3.2 + i * 2.5, wx = x0 + t;
                 this.wallPlane(1.9, 2.5, this.brand("#1a1815"), wx + 0.04, y, z0 + 1.95, Math.PI / 2);
                 this.box(0.06, 1.9, 0.06, wx + 0.07, y, z0 + 3.2, warm, false);
@@ -1041,7 +1412,7 @@ define(["three", "scene", "physics", "bag", "gltfLoader"], (THREE, scene, Physic
             // east side: glass cases on plinths in two rows, campaign wall behind them
             for (var j = 0; j < 6; j++)
             {
-                var c = BAG_COLOURS[(j + 1) % BAG_COLOURS.length];
+                var c = BAG_COLOURS[[7, 4, 9, 5, 6, 8][j]];
                 this.vitrine(x1 - 3.2 - (j % 2) * 3.4, fy + 3.5 + Math.floor(j / 2) * 4.2 + (j % 2) * 2.1, c.color, { rotZ : Math.PI });
             }
             var poster = this.drawnTexture(768, 1024, (ctx, W, H, img) =>
@@ -1144,6 +1515,9 @@ define(["three", "scene", "physics", "bag", "gltfLoader"], (THREE, scene, Physic
 
             // prize bags hanging from the canopy
             [C.clay, C.olive, C.beige].forEach((c, i) => this.displayBag(c, bx - 2 + i * 2, by + 0.2, z0 + 4.25, 0.03, -Math.PI / 2, false));
+
+            // the prize
+            this.trophy(bx + 2.4, by, z0 + 1.18, 1.1, 0);
 
             // attendant
             this.person({ x : bx, y : by + 1.6, phi : 0, name : "Booth", bag : C.stone, shirt : C.orange, pants : C.washed, skin : "#a8734f",
