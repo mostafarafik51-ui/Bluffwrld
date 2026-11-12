@@ -61,8 +61,7 @@ define(["three", "scene", "colors", "eventQ", "time"],
             //     window.innerWidth / -scale, window.innerWidth / scale,
             //     window.innerHeight / scale, window.innerHeight / -scale, 0.1, 1000);
             //
-            const dirLightHelper = new THREE.DirectionalLightHelper(Light.sunlight, 20);
-            scene.add(dirLightHelper);
+            // (debug helper for the sun removed: it drew a wireframe square in the sky)
         },
 
         render : () => {

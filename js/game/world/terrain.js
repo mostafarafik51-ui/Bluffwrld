@@ -60,7 +60,8 @@ define(["three", "utils", "scene", "light", "time", "camera", "physics",
                 action: () => {
                     // Player.collider.addMesh("this_Ground", this.collider_mesh);
                     Player.input_handler.toggleAlpha = this.toggleAlpha.bind(this);
-                    Player.isGrounded = this.isGrounded.bind(this);
+                    // grounded on the terrain, or on a built surface such as the city streets
+                    Player.isGrounded = () => (Player.onPlatform && Player.onPlatform()) || this.isGrounded();
 
                     // initialize the ammo collider
                     this.updateCollider();
