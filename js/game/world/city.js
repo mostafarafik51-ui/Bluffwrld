@@ -10,7 +10,7 @@
 //      ---- cross street (logo roundabout in the middle) ---- gate + bridge east
 //         shops         |  main street  |     shops
 //
-define(["three", "scene", "physics", "bag"], (THREE, scene, Physics, Bag) =>
+define(["three", "scene", "physics", "bag", "gltfLoader"], (THREE, scene, Physics, Bag, GLTFLoader) =>
 {
     var HALF = 70;              // the city deck spans -HALF..HALF in x and y
     var DECK_Z = 23;            // height of the streets (just above the valley floor's highest point)
@@ -75,6 +75,7 @@ define(["three", "scene", "physics", "bag"], (THREE, scene, Physics, Bag) =>
         init : function()
         {
             this.loadLogo();
+            this.loadCrescent();
             this.buildDeck();
             this.buildBuildings();
             this.buildBluffStore();
@@ -690,19 +691,99 @@ define(["three", "scene", "physics", "bag"], (THREE, scene, Physics, Bag) =>
             return new THREE.MeshBasicMaterial({ map : tex, transparent : !bg, side : THREE.DoubleSide });
         },
 
-        // a bag hanging / standing on display. (x, y, z) is where the top of its strap goes.
+        // ---- The Crescent: the real product model from the Bluff studio ----
+        crescent : null,
+        crescent_waiters : [],
+        crescent_materials : {},
+        CRESCENT_HEIGHT : 1.3136,       // model height in its own units, strap top included
+
+        loadCrescent : function()
+        {
+            new THREE.GLTFLoader().load("js/models/crescent.glb", (gltf) =>
+            {
+                var model = gltf.scene;
+                // a neutral grey copy of the fabric photo, so each colourway can tint it
+                model.traverse((o) =>
+                {
+                    // the model ships without normals; lit materials need them
+                    if (o.isMesh && !o.geometry.attributes.normal) o.geometry.computeVertexNormals();
+                    if (o.isMesh && o.material.map && !this.crescent_fabric)
+                    {
+                        var img = o.material.map.image;
+                        var cv = this.canvas(img.width, img.height), ctx = cv.getContext("2d");
+                        ctx.drawImage(img, 0, 0);
+                        var data = ctx.getImageData(0, 0, cv.width, cv.height), d = data.data, sum = 0;
+                        for (var i = 0; i < d.length; i += 4)
+                        {
+                            var l = 0.3 * d[i] + 0.59 * d[i + 1] + 0.11 * d[i + 2];
+                            d[i] = d[i + 1] = d[i + 2] = l;
+                            sum += l;
+                        }
+                        var gain = 205 / (sum / (d.length / 4));       // lift the weave to a light grey
+                        for (var k = 0; k < d.length; k += 4) d[k] = d[k + 1] = d[k + 2] = Math.min(255, d[k] * gain);
+                        ctx.putImageData(data, 0, 0);
+                        var tex = new THREE.CanvasTexture(cv);
+                        tex.encoding = THREE.sRGBEncoding;
+                        tex.flipY = o.material.map.flipY;
+                        tex.wrapS = o.material.map.wrapS; tex.wrapT = o.material.map.wrapT;
+                        this.crescent_fabric = tex;
+                    }
+                });
+                this.crescent = model;
+                this.crescent_waiters.forEach((fn) => fn());
+                this.crescent_waiters = [];
+            }, undefined, (error) => console.error("city.js: could not load the Crescent model", error));
+        },
+
+        // a copy of the Crescent in one colourway
+        crescentCopy : function(color)
+        {
+            var mats = this.crescent_materials[color];
+            if (!mats)
+            {
+                var base = new THREE.Color(color).convertSRGBToLinear();
+                mats = this.crescent_materials[color] =
+                {
+                    fabric : new THREE.MeshStandardMaterial({ map : this.crescent_fabric, color : base, roughness : 0.9, side : THREE.DoubleSide }),
+                    // "concealed discovery orange interior lining"
+                    lining : new THREE.MeshStandardMaterial({ color : new THREE.Color(C.orange).convertSRGBToLinear(), roughness : 0.85, side : THREE.DoubleSide }),
+                    stitch : new THREE.MeshStandardMaterial({ color : base.clone().multiplyScalar(0.6), roughness : 0.9 }),
+                    thread : new THREE.MeshStandardMaterial({ color : new THREE.Color(C.cream).convertSRGBToLinear(), roughness : 0.8 }),
+                };
+            }
+            var copy = this.crescent.clone(true);
+            copy.traverse((o) =>
+            {
+                if (!o.isMesh) return;
+                var name = o.material.name || "";
+                o.material = o.material.map ? mats.fabric : /lining/i.test(name) ? mats.lining : /stitch/i.test(name) ? mats.stitch : mats.thread;
+            });
+            return copy;
+        },
+
+        // a bag hanging / standing on display. (x, y, z) is where the top of its strap goes;
+        // `scale` * 42 is its full height in plan units. With rotZ = 0 its front faces +X.
         displayBag : function(color, x, y, z, scale, rotZ, spin)
         {
-            var bag = Bag.create(new THREE.Color(color).convertSRGBToLinear(), Bag.DISPLAY);
-            bag.scale.setScalar(scale);
-            bag.rotation.x = Math.PI / 2;                      // loop upright, face along X
-            bag.position.z = -Bag.DISPLAY.shoulder.y * scale;   // hang from the strap's top
             var holder = new THREE.Group();
             holder.position.set(x, y, z);
             holder.rotation.z = rotZ || 0;
-            holder.add(bag);
             this.group.add(holder);
             if (spin) this.spinners.push(holder);
+
+            var place = () =>
+            {
+                var s = scale * 42 / this.CRESCENT_HEIGHT;
+                var bag = this.crescentCopy(color);
+                bag.scale.setScalar(s);
+                bag.rotation.x = Math.PI / 2;                    // model is Y-up: stand it on Z
+                bag.position.z = -this.CRESCENT_HEIGHT * s;      // hang from the strap's top
+                var turn = new THREE.Group();
+                turn.rotation.z = Math.PI / 2;                   // front towards +X
+                turn.add(bag);
+                holder.add(turn);
+            };
+            if (this.crescent) place(); else this.crescent_waiters.push(place);
             return holder;
         },
 
@@ -869,7 +950,7 @@ define(["three", "scene", "physics", "bag"], (THREE, scene, Physics, Bag) =>
 
             // ---- roof: a giant bag turning inside the logo's ring -------------
             this.box(0.6, 0.6, 1.2, cx, fy + 6, z0 + h + 0.6, black, false);
-            this.displayBag(C.clay, cx, fy + 6, z0 + h + 14.5, 0.3, 0, true);
+            this.displayBag(C.clay, cx, fy + 6, z0 + h + 14.2, 0.3, 0, true);
             var ring = new THREE.Mesh(new THREE.TorusBufferGeometry(8.5, 0.22, 10, 72), neon);
             ring.position.set(cx, fy + 6, z0 + h + 2.2);
             this.group.add(ring);
@@ -917,7 +998,10 @@ define(["three", "scene", "physics", "bag"], (THREE, scene, Physics, Bag) =>
             this.group.add(rug_ring);
 
             // centrepiece: tall glass case with a turning bag
-            this.vitrine(cx, cy - 1, C.clay, { size : 1.9, plinth : 0.85, tall : 2.5, base : C.washed, spin : true });
+            this.vitrine(cx, cy - 1, C.olive, { size : 1.9, plinth : 0.85, tall : 2.5, base : C.washed, spin : true });
+            // product plaque on the centre plinth
+            this.wallPlane(1.86, 0.5, this.textMaterial("THE CRESCENT", { fg : C.cream, w : 768, h : 200, size : 0.78 }), cx, cy - 1 - 0.96, z0 + 0.52, 0);
+            this.wallPlane(1.86, 0.2, this.textMaterial("BATCH 01  /  900 EGP  /  FREE DELIVERY", { fg : C.orange, mono : true, w : 1024, h : 110, size : 0.5 }), cx, cy - 1 - 0.96, z0 + 0.2, 0);
 
             // west wall: bags hanging on brass rails in lit niches, one colourway each
             for (var i = 0; i < 8; i++)
@@ -928,9 +1012,11 @@ define(["three", "scene", "physics", "bag"], (THREE, scene, Physics, Bag) =>
                 this.box(0.06, 1.9, 0.06, wx + 0.07, y, z0 + 3.2, warm, false);
                 this.box(0.34, 0.05, 0.05, wx + 0.17, y, z0 + 2.7, brass, false);
                 this.displayBag(bc.color, wx + 0.36, y, z0 + 2.67, 0.03, 0, false);
-                this.wallPlane(1.8, 0.2, this.textMaterial(bc.name + " / 0" + (i % BAG_COLOURS.length + 1), { fg : C.cream, mono : true, w : 512, h : 64, size : 0.62 }),
+                this.wallPlane(1.8, 0.2, this.textMaterial(bc.name + " / 900 EGP", { fg : C.cream, mono : true, w : 512, h : 64, size : 0.62 }),
                     wx + 0.06, y, z0 + 0.98, Math.PI / 2);
             }
+            this.wallPlane(13, 1.5, this.textMaterial("THE CRESCENT", { fg : C.washed, size : 0.86 }), x0 + t + 0.06, fy + 12, z0 + 5.6, Math.PI / 2);
+            this.wallPlane(9, 0.42, this.textMaterial("BATCH 01  /  THE INSIDE? NOT OUR THING.", { fg : C.clay, mono : true, w : 1024, h : 72, size : 0.62 }), x0 + t + 0.06, fy + 12, z0 + 4.55, Math.PI / 2);
             // a long low shelf under them with folded dust bags
             this.box(0.7, 19.5, 0.5, x0 + t + 0.4, fy + 12, z0, black, true);
 
@@ -938,7 +1024,7 @@ define(["three", "scene", "physics", "bag"], (THREE, scene, Physics, Bag) =>
             for (var j = 0; j < 6; j++)
             {
                 var c = BAG_COLOURS[(j + 1) % BAG_COLOURS.length];
-                this.vitrine(x1 - 3.2 - (j % 2) * 3.4, fy + 3.5 + Math.floor(j / 2) * 4.2 + (j % 2) * 2.1, c.color, { rotZ : Math.PI / 2 });
+                this.vitrine(x1 - 3.2 - (j % 2) * 3.4, fy + 3.5 + Math.floor(j / 2) * 4.2 + (j % 2) * 2.1, c.color, { rotZ : Math.PI });
             }
             var poster = this.drawnTexture(768, 1024, (ctx, W, H, img) =>
             {
@@ -973,12 +1059,12 @@ define(["three", "scene", "physics", "bag"], (THREE, scene, Physics, Bag) =>
             this.box(0.5, 0.3, 0.55, cx - 2.8, desk_y, z0 + dh + 0.08, this.brand(C.orange), false);          // shopping bag
             this.person({ x : cx + 1.2, y : desk_y + 1.7, phi : 0, name : "Cashier", bag : C.clay,
                 shirt : C.washed, pants : C.stone, skin : "#8d5b3e",
-                lines : ["Welcome to BLUFF. Nothing to prove.", "Five colours in store today. Washed Black sells out first.", "Card or cash, whenever you're ready."] });
+                lines : ["Welcome to BLUFF. Lower your voice.", "The Crescent, Batch 01. 900 EGP, delivery is free.", "Please don't call us a brand. We don't have the energy for a PR crisis."] });
 
             // sales person on the floor
             this.person({ x : cx - 5.5, y : fy + 6.5, phi : 0, name : "Sales", bag : C.olive,
                 shirt : C.cream, pants : C.washed, skin : "#c79a78", hair : "#3a2a1c",
-                lines : ["Try one on. It sits across the body, pouch at the back.", "The centre case is Burnt Clay, new this season.", "Play BLUFF RUN at the booth outside. Grab every logo to win."] });
+                lines : ["Burnt-clay zipper puller, orange lining, NFC chip inside. We'd explain the bag, but we won't.", "Loud is a bluff. Carry it when you're already over it.", "Play BLUFF RUN at the booth outside. Grab every logo to win."] });
 
             // lounge bench
             this.box(5, 1.5, 0.5, cx - 7.5, by - 5, z0, this.brand(C.stone, { roughness : 0.6 }), true);
@@ -1039,7 +1125,7 @@ define(["three", "scene", "physics", "bag"], (THREE, scene, Physics, Bag) =>
             this.wallPlane(6.4, 3.2, new THREE.MeshBasicMaterial({ map : rules }), bx, by + 2.78, z0 + 2.5, 0);
 
             // prize bags hanging from the canopy
-            [C.clay, C.olive, C.beige].forEach((c, i) => this.displayBag(c, bx - 2 + i * 2, by + 0.2, z0 + 4.25, 0.03, Math.PI / 2, false));
+            [C.clay, C.olive, C.beige].forEach((c, i) => this.displayBag(c, bx - 2 + i * 2, by + 0.2, z0 + 4.25, 0.03, -Math.PI / 2, false));
 
             // attendant
             this.person({ x : bx, y : by + 1.6, phi : 0, name : "Booth", bag : C.stone, shirt : C.orange, pants : C.washed, skin : "#a8734f",
