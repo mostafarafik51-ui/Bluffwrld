@@ -101,6 +101,18 @@ define(["three", "scene", "physics", "bag", "gltfLoader"], (THREE, scene, Physic
                 this.spinners[i].rotation.z += delta * 0.6;
             }
             if (!player || !player.initialized) return;
+            // swap the player's placeholder bag for the real Crescent, once
+            if (!this.player_dressed)
+            {
+                var spine = player.threeObj.getObjectByName("mixamorigSpine2");
+                if (spine)
+                {
+                    if (player.bag) spine.remove(player.bag);
+                    player.bag = this.wear(C.washed);
+                    spine.add(player.bag);
+                }
+                this.player_dressed = true;
+            }
             // player position in plan units
             var wp = player.threeObj.position;
             var pos = this.plan_pos.set(wp.x / K, wp.y / K, (wp.z - DECK_Z) / K + DECK_Z);
@@ -761,6 +773,49 @@ define(["three", "scene", "physics", "bag", "gltfLoader"], (THREE, scene, Physic
             return copy;
         },
 
+        // The Crescent as worn across the body, built in the character's upper-spine space
+        // (same space as bag.js): the real bag body lies diagonally on the back, and a fabric
+        // strap in the same colour runs from it over the right shoulder and across the chest.
+        wear : function(color)
+        {
+            var worn = new THREE.Group();
+            worn.name = "BluffBag";
+            var tint = new THREE.Color(color).convertSRGBToLinear();
+
+            // strap: the bag.js loop with no pouch
+            worn.add(Bag.create(tint,
+            {
+                pouch_half_width : Bag.strap_half_width, pouch_half_thickness : Bag.strap_half_thickness, drop_scale : 0,
+            }));
+
+            var place = () =>
+            {
+                var bag = this.crescentCopy(color);
+                // the model's own handle is replaced by the strap above
+                bag.traverse((o) =>
+                {
+                    if (!o.isMesh) return;
+                    if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+                    if (o.geometry.boundingBox.min.y > 0.75) o.visible = false;
+                    o.frustumCulled = false;
+                });
+                var s = 30;                                                          // model units -> spine units
+                var up = Bag.shoulder.clone().sub(Bag.centre).normalize();           // hip -> shoulder diagonal
+                var out = new THREE.Vector3(0, 0, -1);                               // away from the back
+                var side = new THREE.Vector3().crossVectors(up, out);
+                var back_z = Bag.centre.z - Bag.half_depth;
+                // top of the bag sits high on the back, under the shoulder blade
+                var top = Bag.centre.clone().addScaledVector(up, 9.5);
+                top.z = back_z - 1.9;
+                bag.matrixAutoUpdate = false;
+                bag.matrix.makeBasis(side, up, out).scale(new THREE.Vector3(s, s, s))
+                    .setPosition(top.addScaledVector(up, -0.81 * s));
+                worn.add(bag);
+            };
+            if (this.crescent) place(); else this.crescent_waiters.push(place);
+            return worn;
+        },
+
         // a bag hanging / standing on display. (x, y, z) is where the top of its strap goes;
         // `scale` * 42 is its full height in plan units. With rotZ = 0 its front faces +X.
         displayBag : function(color, x, y, z, scale, rotZ, spin)
@@ -855,7 +910,7 @@ define(["three", "scene", "physics", "bag", "gltfLoader"], (THREE, scene, Physic
             // staff wear the bag
             if (o.bag)
             {
-                var bag = Bag.create(new THREE.Color(o.bag).convertSRGBToLinear());
+                var bag = this.wear(o.bag);
                 bag.scale.setScalar(0.0125);
                 bag.rotation.x = Math.PI / 2;
                 bag.position.set(0, 0.04, 0.70);
