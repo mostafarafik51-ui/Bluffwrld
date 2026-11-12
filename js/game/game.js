@@ -27,7 +27,7 @@ define(["three", "renderer", "camera", "container", "scene", "physics", "world",
             Physics.update(delta);
             Player.update(delta);
             World.update(delta, Player);
-            City.update(delta);
+            City.update(delta, Player);
 
             renderer.render(scene, camera);
 

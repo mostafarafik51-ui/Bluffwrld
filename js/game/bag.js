@@ -24,19 +24,41 @@ define(["three"], (THREE) =>
         pouch_half_width : 9.0,
         pouch_half_thickness : 3.0,
 
+        drop_scale : 1.0,             // how far the pouch belly hangs below the strap line
+
         loop_segments : 160,
         section_segments : 20,
 
-        create : function()
+        // shape used when the bag hangs on display instead of being worn:
+        // an upright loop with the crescent pouch at the bottom
+        DISPLAY :
         {
-            var mesh = new THREE.Mesh(this.createGeometry(), this.createMaterial());
+            centre : new THREE.Vector3(0, 0, 0),
+            shoulder : new THREE.Vector3(0, 14, 0),
+            half_depth : 10.5,
+            squareness : 2.0,
+            strap_half_width : 2.2,
+            strap_half_thickness : 0.7,
+            pouch_angle : Math.PI,
+            pouch_span : 1.75,
+            pouch_half_width : 4.4,
+            pouch_half_thickness : 8.2,
+            drop_scale : 0.0,
+        },
+
+        // color: fabric colour (defaults to washed black)
+        // shape: optional overrides of the settings above, e.g. Bag.DISPLAY
+        create : function(color, shape)
+        {
+            var builder = Object.assign(Object.create(this), shape || {});
+            var mesh = new THREE.Mesh(builder.createGeometry(), this.createMaterial(color));
             mesh.name = "BluffBag";
             mesh.frustumCulled = false;
             return mesh;
         },
 
         // matte black ripstop nylon: near-black, rough, with a fine woven grid
-        createMaterial : function()
+        createMaterial : function(color)
         {
             var size = 64;
             var canvas = document.createElement("canvas");
@@ -65,7 +87,7 @@ define(["three"], (THREE) =>
 
             return new THREE.MeshStandardMaterial(
             {
-                color : 0x030304,
+                color : color === undefined ? 0x030304 : color,
                 roughness : 0.92,
                 metalness : 0.0,
                 bumpMap : bump,
@@ -130,7 +152,7 @@ define(["three"], (THREE) =>
 
                 // keep the top edge in line with the strap, let the belly hang down,
                 // and rest the inner face against the body
-                var drop = (half_w - this.strap_half_width);
+                var drop = (half_w - this.strap_half_width) * this.drop_scale;
                 var lift = half_t;
 
                 for (var j = 0; j <= m; j++)

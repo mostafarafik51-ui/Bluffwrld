@@ -19,6 +19,10 @@ define(["three", "scene", "physics", "bag"], (THREE, scene, Physics, Bag) =>
     var DEPTH = 14;             // building depth
     var FLOOR = 3;              // floor height
     var BAY = 2.4;              // width of one window bay
+    // The city is modelled in "plan units" (a floor is 3 high) and then shrunk by K so that
+    // doors, counters and bags are the right size next to the ~1 unit tall player.
+    var K = 0.62;
+    var BRIDGE = 100 / K - HALF;   // plan length of the east bridge (it lands on the hillside at world x = 100)
 
     // palette taken from the logo: charcoal and white, with concrete in between
     var C =
@@ -26,18 +30,47 @@ define(["three", "scene", "physics", "bag"], (THREE, scene, Physics, Bag) =>
         charcoal : "#262626", ink : "#141414", white : "#f2f0ea", concrete : "#b9b6ae",
         pavement : "#c9c6be", asphalt : "#2f2f31", glass : "#1d2a33", glass_lit : "#f5d98a",
         accent : "#e4472b",
+        // brand palette from bluff.508.world
+        washed : "#12110F", orange : "#ff4e00", clay : "#B6521F", olive : "#6E6B4E",
+        stone : "#9A968B", beige : "#D8CFBE", cream : "#e8e3d8", hairline : "#2e2b24",
     };
+    var FONT_MARK = "'Permanent Marker', 'Arial Black', Impact, sans-serif";
+    var FONT_MONO = "'IBM Plex Mono', 'Courier New', monospace";
+    // the bag's colourways
+    var BAG_COLOURS =
+    [
+        { name : "WASHED BLACK", color : "#12110F" },
+        { name : "BURNT CLAY",   color : "#B6521F" },
+        { name : "OLIVE GREEN",  color : "#6E6B4E" },
+        { name : "STONE GREY",   color : "#9A968B" },
+        { name : "DUST BEIGE",   color : "#D8CFBE" },
+    ];
 
     var City =
     {
         HALF : HALF,
         DECK_Z : DECK_Z,
-        spawn : new THREE.Vector3(0, -30, DECK_Z + 2),
-        group : new THREE.Group(),
+        SCALE : K,
+        spawn : new THREE.Vector3(0, -30 * K, DECK_Z + 2),
+        group : new THREE.Group(),      // everything in plan units, scaled by K
+        far : new THREE.Group(),        // things placed directly in world units (the mountain sign)
+        parent : null,
         spinners : [],
         logo_image : null,
         logo_waiters : [],
         seed : 7,
+        clock : 0,
+        plan_pos : new THREE.Vector3(),
+        npcs : [],
+        talking : null,
+        near_booth : false,
+        booth : { x : -27, y : 48 },
+        park : { cx : 45, cy : 46, pond_r : 5, path_y : 46 },
+        game :
+        {
+            running : false, score : 0, time : 0, limit : 60, total : 10, result : null, result_until : 0, tokens : [],
+            spots : [[-20, 40], [-7, 38], [7, 38], [20, 40], [30, 46], [45, 36.5], [59, 46], [45, 55.5], [-43, 56], [-58, 46]],
+        },
 
         init : function()
         {
@@ -46,25 +79,57 @@ define(["three", "scene", "physics", "bag"], (THREE, scene, Physics, Bag) =>
             this.buildBuildings();
             this.buildBluffStore();
             this.buildParks();
+            this.buildBooth();
+            this.buildHud();
             this.buildStreetFurniture();
+            this.parent = this.far;
             this.buildMountainSign();
+            this.parent = null;
+            // shrink the plan about the street level so the streets stay at DECK_Z
+            this.group.scale.setScalar(K);
+            this.group.position.z = DECK_Z * (1 - K);
             scene.add(this.group);
+            scene.add(this.far);
         },
 
-        update : function(delta)
+        update : function(delta, player)
         {
+            this.clock += delta;
             for (var i = 0; i < this.spinners.length; i++)
             {
                 this.spinners[i].rotation.z += delta * 0.6;
+            }
+            if (!player || !player.initialized) return;
+            // player position in plan units
+            var wp = player.threeObj.position;
+            var pos = this.plan_pos.set(wp.x / K, wp.y / K, (wp.z - DECK_Z) / K + DECK_Z);
+
+            this.updateGame(delta, pos);
+            var talking = this.updatePeople(delta, pos);
+
+            // bottom message: booth prompt first, then whoever is speaking
+            var dx = pos.x - this.booth.x, dy = pos.y - (this.booth.y - 3);
+            this.near_booth = dx * dx + dy * dy < 36 && Math.abs(pos.z - DECK_Z) < 3;
+            if (this.near_booth && !this.game.running)
+            {
+                this.show(this.hud_msg, "<span style=\"color:#ff4e00\">PRESS E</span> &nbsp;TO PLAY BLUFF RUN &nbsp;•&nbsp; " +
+                    this.game.total + " logos, " + this.game.limit + " seconds");
+            } else if (talking && !this.game.running)
+            {
+                this.show(this.hud_msg, "<span style=\"color:#ff4e00\">" + talking.name.toUpperCase() + "</span> &nbsp; " + talking.lines[talking.line]);
+            } else
+            {
+                this.show(this.hud_msg, null);
             }
         },
 
         // height of the walkable city surface under (x, y), or -Infinity outside the city
         groundHeightAt : function(x, y)
         {
+            x /= K; y /= K;     // world -> plan units
             if (Math.abs(x) <= HALF && Math.abs(y) <= HALF) return DECK_Z;
             // bridge out of the east gate
-            if (x > HALF && x <= HALF + 32 && Math.abs(y) <= STREET) return DECK_Z;
+            if (x > HALF && x <= HALF + BRIDGE && Math.abs(y) <= STREET) return DECK_Z;
             return -Infinity;
         },
 
@@ -150,15 +215,17 @@ define(["three", "scene", "physics", "bag"], (THREE, scene, Physics, Bag) =>
             var mesh = new THREE.Mesh(new THREE.BoxBufferGeometry(w, d, h), material);
             mesh.position.set(x, y, zBase + h / 2);
             mesh.rotation.z = rotZ || 0;
-            this.group.add(mesh);
+            (this.parent || this.group).add(mesh);
             if (collide) this.collider(w, d, h, mesh.position, mesh.quaternion);
             return mesh;
         },
 
         collider : function(w, d, h, position, quaternion)
         {
-            var shape = new Physics.ammo.btBoxShape(new Physics.ammo.btVector3(w / 2, d / 2, h / 2));
-            return Physics.createRigidbody(null, shape, 0, position, quaternion || new THREE.Quaternion());
+            // plan units -> world units
+            var shape = new Physics.ammo.btBoxShape(new Physics.ammo.btVector3(w * K / 2, d * K / 2, h * K / 2));
+            var world = new THREE.Vector3(position.x * K, position.y * K, (position.z - DECK_Z) * K + DECK_Z);
+            return Physics.createRigidbody(null, shape, 0, world, quaternion || new THREE.Quaternion());
         },
 
         // upright plane whose face looks along (sin phi, -cos phi):
@@ -169,7 +236,7 @@ define(["three", "scene", "physics", "bag"], (THREE, scene, Physics, Bag) =>
             mesh.position.set(x, y, z);
             mesh.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), phi)
                 .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2));
-            this.group.add(mesh);
+            (this.parent || this.group).add(mesh);
             return mesh;
         },
 
@@ -178,7 +245,7 @@ define(["three", "scene", "physics", "bag"], (THREE, scene, Physics, Bag) =>
         {
             var mesh = new THREE.Mesh(new THREE.PlaneBufferGeometry(w, d), material);
             mesh.position.set(x, y, z);
-            this.group.add(mesh);
+            (this.parent || this.group).add(mesh);
             return mesh;
         },
 
@@ -240,9 +307,33 @@ define(["three", "scene", "physics", "bag"], (THREE, scene, Physics, Bag) =>
             stripes(true, 12, 14.2); stripes(true, -14.2, -12);
             stripes(false, 32, 34.5);
 
-            // Bluff plaza: dark stone in front of the store
-            ctx.fillStyle = "#3a3a3c";
-            rect(-22, 36, 22, 42);
+            // Bluff Park: lawn, paths and the paved ring round the pond
+            var P = this.park;
+            ctx.fillStyle = "#4f6f3e";
+            rect(21.5, 23, 69.4, 69.4);
+            for (var gn = 0; gn < 14000; gn++)
+            {
+                ctx.fillStyle = this.random() < 0.5 ? "rgba(20,50,20,0.25)" : "rgba(150,190,90,0.18)";
+                ctx.fillRect(X(21.5 + this.random() * 47.9), Y(23 + this.random() * 46.4), 2, 3);
+            }
+            ctx.fillStyle = C.beige;
+            rect(18, P.path_y - 1.7, 69.4, P.path_y + 1.7);
+            rect(P.cx - 1.7, 23, P.cx + 1.7, 69.4);
+            ctx.beginPath(); ctx.arc(X(P.cx), Y(P.cy), px(P.pond_r + 5.2), 0, Math.PI * 2); ctx.fill();
+            ctx.strokeStyle = C.clay; ctx.lineWidth = px(0.3);
+            ctx.beginPath(); ctx.arc(X(P.cx), Y(P.cy), px(P.pond_r + 5.2), 0, Math.PI * 2); ctx.stroke();
+
+            // Bluff plaza: washed-black stone in front of the store, with an orange runner to the door
+            ctx.fillStyle = "#1c1a17";
+            rect(-22, 36, 22, 43);
+            ctx.fillStyle = C.orange;
+            rect(-2.2, 36, 2.2, 43);
+            ctx.fillStyle = "rgba(232,227,216,0.5)";
+            rect(-22, 35.8, 22, 36); rect(-2.45, 36, -2.2, 43); rect(2.2, 36, 2.45, 43);
+
+            // start circle in front of the game booth
+            ctx.strokeStyle = C.orange; ctx.lineWidth = px(0.4);
+            ctx.beginPath(); ctx.arc(X(this.booth.x), Y(this.booth.y - 3.4), px(2.6), 0, Math.PI * 2); ctx.stroke();
 
             // roundabout: the ring from the logo, with the logo inside it
             ctx.fillStyle = C.asphalt;
@@ -261,7 +352,7 @@ define(["three", "scene", "physics", "bag"], (THREE, scene, Physics, Bag) =>
             });
 
             // slab: the plateau the city stands on
-            var thickness = 30;
+            var thickness = 42;
             var side = this.matte("#6f6a62");
             var top = new THREE.MeshStandardMaterial({ map : tex, roughness : 0.95 });
             var slab = this.box(size, size, thickness, 0, 0, DECK_Z - thickness,
@@ -270,9 +361,10 @@ define(["three", "scene", "physics", "bag"], (THREE, scene, Physics, Bag) =>
 
             // bridge out of the east gate to the hillside
             var road = this.matte(C.asphalt);
-            this.box(34, STREET * 2, 2, HALF + 16, 0, DECK_Z - 2, [side, side, side, side, road, side], true);
-            this.box(34, 0.4, 1.0, HALF + 16, STREET + 0.2, DECK_Z, side, true);
-            this.box(34, 0.4, 1.0, HALF + 16, -STREET - 0.2, DECK_Z, side, true);
+            this.box(BRIDGE + 2, STREET * 2, 2, HALF + BRIDGE / 2, 0, DECK_Z - 2, [side, side, side, side, road, side], true);
+            this.box(BRIDGE, 0.4, 1.0, HALF + BRIDGE / 2, STREET + 0.2, DECK_Z, side, true);
+            this.box(BRIDGE, 0.4, 1.0, HALF + BRIDGE / 2, -STREET - 0.2, DECK_Z, side, true);
+            for (var bp = 12; bp < BRIDGE - 6; bp += 16) this.box(1.4, STREET * 2 - 1, 40, HALF + bp, 0, DECK_Z - 42, side, false);
 
             // parapet around the plateau, open at the east gate
             var wall = this.matte(C.charcoal);
@@ -507,113 +599,603 @@ define(["three", "scene", "physics", "bag"], (THREE, scene, Physics, Bag) =>
         },
 
         // ====================================================================
+        //  Brand helpers (colours and type from bluff.508.world)
+        // ====================================================================
+
+        // run fn now, and again once the brand fonts have loaded, so text is redrawn in them
+        onFonts : function(fn)
+        {
+            fn();
+            if (document.fonts && document.fonts.load)
+            {
+                Promise.all([document.fonts.load("64px 'Permanent Marker'"), document.fonts.load("32px 'IBM Plex Mono'")])
+                    .then(() => fn()).catch(() => {});
+            }
+        },
+
+        // a texture whose drawing is repeated when fonts / the logo arrive
+        drawnTexture : function(w, h, draw)
+        {
+            var cv = this.canvas(w, h), ctx = cv.getContext("2d");
+            var tex = this.texture(cv);
+            var redraw = () =>
+            {
+                ctx.clearRect(0, 0, w, h);
+                draw(ctx, w, h, this.logo_image);
+                tex.needsUpdate = true;
+            };
+            this.onFonts(redraw);
+            if (!this.logo_image) this.withLogo(redraw);
+            return tex;
+        },
+
+        // lit material in an exact brand colour
+        brand : function(color, extra)
+        {
+            return new THREE.MeshStandardMaterial(Object.assign(
+                { color : new THREE.Color(color).convertSRGBToLinear(), roughness : 0.85, metalness : 0.0 }, extra || {}));
+        },
+
+        // unlit, always-bright material (neon, light strips, signs)
+        glow : function(color, extra)
+        {
+            return new THREE.MeshBasicMaterial(Object.assign(
+                { color : new THREE.Color(color).convertSRGBToLinear() }, extra || {}));
+        },
+
+        // raw concrete from the brand site, optionally tinted
+        concrete : function(repeatX, repeatY, tint)
+        {
+            var tex = new THREE.TextureLoader().load("js/textures/bluff_concrete.jpg");
+            tex.encoding = THREE.sRGBEncoding;
+            tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+            tex.repeat.set(repeatX || 1, repeatY || 1);
+            tex.anisotropy = 8;
+            return new THREE.MeshStandardMaterial({ map : tex, color : new THREE.Color(tint || "#ffffff").convertSRGBToLinear(), roughness : 0.9 });
+        },
+
+        glass : function(opacity)
+        {
+            return new THREE.MeshStandardMaterial(
+            {
+                color : new THREE.Color("#9fb4bd").convertSRGBToLinear(), roughness : 0.05, metalness : 0.2,
+                transparent : true, opacity : opacity === undefined ? 0.16 : opacity,
+                depthWrite : false, side : THREE.DoubleSide,
+            });
+        },
+
+        // text sign: marker wordmark or mono label
+        textMaterial : function(text, o)
+        {
+            o = o || {};
+            var w = o.w || 1024, h = o.h || 256;
+            var tex = this.drawnTexture(w, h, (ctx, W, H) =>
+            {
+                if (o.bg) { ctx.fillStyle = o.bg; ctx.fillRect(0, 0, W, H); }
+                ctx.fillStyle = o.fg || C.cream;
+                ctx.textAlign = "center"; ctx.textBaseline = "middle";
+                ctx.font = (o.mono ? "600 " : "") + Math.round(H * (o.size || 0.62)) + "px " + (o.mono ? FONT_MONO : FONT_MARK);
+                ctx.fillText(text, W / 2, H * 0.54, W * 0.94);
+            });
+            return new THREE.MeshBasicMaterial({ map : tex, transparent : !o.bg, side : THREE.DoubleSide });
+        },
+
+        logoMaterial : function(color, bg)
+        {
+            var tex = this.drawnTexture(512, 512, (ctx, W, H, img) =>
+            {
+                if (bg) { ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H); }
+                if (img) this.drawLogo(ctx, img, 16, 16, 480, color);
+            });
+            return new THREE.MeshBasicMaterial({ map : tex, transparent : !bg, side : THREE.DoubleSide });
+        },
+
+        // a bag hanging / standing on display. (x, y, z) is where the top of its strap goes.
+        displayBag : function(color, x, y, z, scale, rotZ, spin)
+        {
+            var bag = Bag.create(new THREE.Color(color).convertSRGBToLinear(), Bag.DISPLAY);
+            bag.scale.setScalar(scale);
+            bag.rotation.x = Math.PI / 2;                      // loop upright, face along X
+            bag.position.z = -Bag.DISPLAY.shoulder.y * scale;   // hang from the strap's top
+            var holder = new THREE.Group();
+            holder.position.set(x, y, z);
+            holder.rotation.z = rotZ || 0;
+            holder.add(bag);
+            this.group.add(holder);
+            if (spin) this.spinners.push(holder);
+            return holder;
+        },
+
+        // glass case on a plinth with a bag inside
+        vitrine : function(x, y, color, o)
+        {
+            o = o || {};
+            var size = o.size || 1.15, plinth = o.plinth || 0.95, tall = o.tall || 1.45, z0 = DECK_Z;
+            this.box(size, size, plinth, x, y, z0, this.brand(o.base || C.beige, { roughness : 0.6 }), true);
+            this.box(size + 0.1, size + 0.1, 0.06, x, y, z0 + plinth, this.glow(C.orange), false);
+            var caseMesh = this.box(size - 0.1, size - 0.1, tall, x, y, z0 + plinth + 0.06, this.glass(0.14), false);
+            caseMesh.renderOrder = 2;
+            this.box(size, size, 0.08, x, y, z0 + plinth + tall + 0.06, this.brand(C.washed), false);
+            var scale = (tall - 0.3) / 42;
+            this.displayBag(color, x, y, z0 + plinth + tall - 0.08, scale, o.rotZ || 0, o.spin);
+            this.collider(size, size, plinth + tall, new THREE.Vector3(x, y, z0 + (plinth + tall) / 2));
+        },
+
+        // ====================================================================
+        //  People
+        // ====================================================================
+
+        // simple stylised person, ~1.05 units tall, standing at (x, y) and facing phi
+        person : function(o)
+        {
+            var g = new THREE.Group();
+            var skin = this.brand(o.skin || "#b98a66", { roughness : 0.7 });
+            var shirt = this.brand(o.shirt || C.washed);
+            var pants = this.brand(o.pants || C.beige);
+            var hair = this.brand(o.hair || "#1a1512");
+            var part = (geo, mat, px, py, pz) =>
+            {
+                var m = new THREE.Mesh(geo, mat);
+                m.position.set(px, py, pz);
+                g.add(m);
+                return m;
+            };
+            // legs and shoes
+            [-0.075, 0.075].forEach((sx) =>
+            {
+                part(new THREE.BoxBufferGeometry(0.11, 0.12, 0.46), pants, sx, 0, 0.27);
+                part(new THREE.BoxBufferGeometry(0.12, 0.2, 0.06), this.brand("#f1ede4"), sx, -0.03, 0.03);
+            });
+            // torso, arms
+            part(new THREE.BoxBufferGeometry(0.3, 0.17, 0.38), shirt, 0, 0, 0.68);
+            [-0.195, 0.195].forEach((sx) =>
+            {
+                part(new THREE.BoxBufferGeometry(0.085, 0.1, 0.16), shirt, sx, 0, 0.79);
+                part(new THREE.BoxBufferGeometry(0.07, 0.08, 0.26), skin, sx, 0, 0.59);
+            });
+            // head
+            var head = new THREE.Group();
+            head.position.set(0, 0, 0.97);
+            g.add(head);
+            var skull = new THREE.Mesh(new THREE.SphereBufferGeometry(0.105, 16, 12), skin);
+            head.add(skull);
+            var cap = new THREE.Mesh(new THREE.SphereBufferGeometry(0.112, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.55), hair);
+            cap.rotation.x = Math.PI / 2;     // dome up
+            cap.position.set(0, 0.012, 0.012);
+            head.add(cap);
+            [-0.04, 0.04].forEach((sx) =>
+            {
+                var eye = new THREE.Mesh(new THREE.SphereBufferGeometry(0.014, 8, 6), this.brand("#0b0a08"));
+                eye.position.set(sx, -0.098, 0.01);
+                head.add(eye);
+            });
+            part(new THREE.CylinderBufferGeometry(0.04, 0.04, 0.06, 8), skin, 0, 0, 0.885).rotation.x = Math.PI / 2;
+
+            // staff wear the bag
+            if (o.bag)
+            {
+                var bag = Bag.create(new THREE.Color(o.bag).convertSRGBToLinear());
+                bag.scale.setScalar(0.0125);
+                bag.rotation.x = Math.PI / 2;
+                bag.position.set(0, 0.04, 0.70);
+                g.add(bag);
+            }
+
+            g.position.set(o.x, o.y, DECK_Z);
+            g.rotation.z = o.phi || 0;
+            g.scale.setScalar(1 / K);          // people are modelled at world size
+            this.group.add(g);
+            this.collider(0.5 / K, 0.5 / K, 1.1 / K, new THREE.Vector3(o.x, o.y, DECK_Z + 0.55 / K));
+            this.npcs.push({ group : g, head : head, home : o.phi || 0, name : o.name, lines : o.lines || [], line : 0, turn : o.turn !== false });
+            return g;
+        },
+
+        // ====================================================================
         //  Bluff store: the flagship at the top of the main street. You can walk in.
         // ====================================================================
 
         buildBluffStore : function()
         {
-            var w = 34, d = 20, h = 9, cx = 0, cy = 53, z0 = DECK_Z, t = 0.6;
-            var front_y = cy - d / 2, back_y = cy + d / 2;
-            var black = this.matte("#0e0e0f", { roughness : 0.6 });
-            var inner = this.matte("#8f8c86");
-            var door = 5;                                    // doorway width
+            var w = 36, d = 24, h = 15, cx = 0, cy = 55, z0 = DECK_Z, t = 0.6;
+            var fy = cy - d / 2, by = cy + d / 2, x0 = cx - w / 2, x1 = cx + w / 2;
+            var black = this.brand(C.washed, { roughness : 0.5 });
+            var beige = this.brand("#b3a68f", { roughness : 0.75 });
+            var neon = this.glow(C.orange);
+            var warm = this.glow("#fff0d2");
+            var brass = this.brand("#b08d57", { roughness : 0.3, metalness : 0.8 });
+            var door = 5, pylon = 5, glass_h = 9;
 
-            // walls (each one is solid, so the inside is a real room)
-            this.box(w, t, h, cx, back_y - t / 2, z0, black, true);                       // back
-            this.box(t, d, h, cx - w / 2 + t / 2, cy, z0, black, true);                   // west
-            this.box(t, d, h, cx + w / 2 - t / 2, cy, z0, black, true);                   // east
-            var seg = (w - door) / 2;
-            this.box(seg, t, h, cx - door / 2 - seg / 2, front_y + t / 2, z0, black, true);   // front, left of the door
-            this.box(seg, t, h, cx + door / 2 + seg / 2, front_y + t / 2, z0, black, true);   // front, right of the door
-            this.box(door, t, h - 3.6, cx, front_y + t / 2, z0 + 3.6, black, false);          // above the door
-            this.box(w + 0.6, d + 0.6, 0.5, cx, cy, z0 + h, this.matte(C.ink), false);        // roof
+            // ---- shell -------------------------------------------------------
+            this.box(w, t, h, cx, by - t / 2, z0, black, true);                        // back
+            this.box(t, d, h, x0 + t / 2, cy, z0, black, true);                        // west
+            this.box(t, d, h, x1 - t / 2, cy, z0, black, true);                        // east
+            this.box(pylon, t, h, x0 + pylon / 2, fy + t / 2, z0, black, true);        // front pylons
+            this.box(pylon, t, h, x1 - pylon / 2, fy + t / 2, z0, black, true);
+            this.box(w - 2 * pylon, t, h - glass_h, cx, fy + t / 2, z0 + glass_h, black, false);   // header over the glass
+            this.box(w + 1, d + 1, 0.6, cx, cy, z0 + h, this.brand("#070605"), false);             // roof slab
 
-            // shop windows either side of the door
-            var glass = new THREE.MeshStandardMaterial(
-                { color : 0x22323c, roughness : 0.15, metalness : 0.3, transparent : true, opacity : 0.55 });
+            // ---- glass front, two storeys tall, with an open doorway ----------
+            var pane = (w - 2 * pylon - door) / 2;
             [-1, 1].forEach((s) =>
             {
-                this.wallPlane(seg - 3, 3.2, glass, cx + s * (door / 2 + seg / 2), front_y - 0.02, z0 + 2.1, 0);
+                var px = cx + s * (door / 2 + pane / 2);
+                var g = this.box(pane, 0.12, glass_h, px, fy + 0.3, z0, this.glass(0.2), false);
+                g.renderOrder = 2;
+                this.collider(pane, 0.4, glass_h, new THREE.Vector3(px, fy + 0.3, z0 + glass_h / 2));
+                // slim black mullions
+                for (var m = 0; m <= 3; m++)
+                {
+                    this.box(0.12, 0.2, glass_h, px - pane / 2 + m * pane / 3, fy + 0.3, z0, black, false);
+                }
+                this.box(pane, 0.2, 0.12, px, fy + 0.3, z0 + 4.4, black, false);
+            });
+            var over = this.box(door, 0.12, glass_h - 4.4, cx, fy + 0.3, z0 + 4.4, this.glass(0.2), false);
+            over.renderOrder = 2;
+            // glowing door frame
+            this.box(0.14, 0.3, 4.4, cx - door / 2, fy + 0.3, z0, neon, false);
+            this.box(0.14, 0.3, 4.4, cx + door / 2, fy + 0.3, z0, neon, false);
+            this.box(door + 0.14, 0.3, 0.14, cx, fy + 0.3, z0 + 4.4, neon, false);
+
+            // ---- facade dressing ----------------------------------------------
+            // wordmark and tagline on the header
+            this.wallPlane(19, 4.6, this.textMaterial("BLUFF", { fg : C.cream, size : 0.86 }), cx, fy - 0.04, z0 + 12.3, 0);
+            this.wallPlane(9, 0.6, this.textMaterial("NOTHING TO PROVE.", { fg : C.orange, mono : true, w : 1024, h : 72, size : 0.7 }),
+                cx, fy - 0.04, z0 + 9.75, 0);
+            // logos and neon fins on the pylons
+            [-1, 1].forEach((s) =>
+            {
+                var px = cx + s * (w / 2 - pylon / 2);
+                this.wallPlane(3.8, 3.8, this.logoMaterial(C.cream), px, fy - 0.04, z0 + 10.6, 0);
+                this.wallPlane(3.6, 0.42, this.textMaterial("EST. 2026", { fg : C.stone, mono : true, w : 512, h : 64, size : 0.7 }), px, fy - 0.04, z0 + 7.9, 0);
+                this.box(0.14, 0.14, h, cx + s * (w / 2 - pylon), fy - 0.08, z0, neon, false);
+                this.box(0.14, 0.14, h, cx + s * (w / 2 - 0.07), fy - 0.08, z0, neon, false);
+                // stone base
+                this.box(pylon + 0.1, 0.2, 1.1, px, fy - 0.08, z0, beige, false);
+            });
+            this.box(w, 0.14, 0.14, cx, fy - 0.08, z0 + h - 0.2, neon, false);
+            this.box(w - 2 * pylon, 0.14, 0.14, cx, fy - 0.08, z0 + glass_h, neon, false);
+            // canopy over the door
+            this.box(9, 3.4, 0.3, cx, fy - 1.7, z0 + 4.6, black, false);
+            this.box(9, 0.1, 0.1, cx, fy - 3.4, z0 + 4.6, neon, false);
+            [-1, 1].forEach((s) => this.box(0.12, 0.12, 4.6, cx + s * 4.3, fy - 3.2, z0, brass, true));
+            // planters
+            [-1, 1].forEach((s) =>
+            {
+                this.box(1.3, 1.3, 1.1, cx + s * 5.6, fy - 1.2, z0, beige, true);
+                var bush = new THREE.Mesh(new THREE.IcosahedronBufferGeometry(0.85, 1), this.brand("#24402c"));
+                bush.position.set(cx + s * 5.6, fy - 1.2, z0 + 1.8);
+                this.group.add(bush);
             });
 
-            // white interior
-            this.floorPlane(w - 2 * t, d - 2 * t, this.matte("#55534f", { roughness : 0.5 }), cx, cy, z0 + 0.03);
-            this.wallPlane(w - 2 * t, h, inner, cx, back_y - t - 0.02, z0 + h / 2, 0);
-            this.wallPlane(d - 2 * t, h, inner, cx - w / 2 + t + 0.02, cy, z0 + h / 2, Math.PI / 2);
-            this.wallPlane(d - 2 * t, h, inner, cx + w / 2 - t - 0.02, cy, z0 + h / 2, -Math.PI / 2);
-            var ceiling = this.floorPlane(w - 2 * t, d - 2 * t, this.matte("#77746f"), cx, cy, z0 + h - 0.02);
+            // ---- roof: a giant bag turning inside the logo's ring -------------
+            this.box(0.6, 0.6, 1.2, cx, fy + 6, z0 + h + 0.6, black, false);
+            this.displayBag(C.clay, cx, fy + 6, z0 + h + 14.5, 0.3, 0, true);
+            var ring = new THREE.Mesh(new THREE.TorusBufferGeometry(8.5, 0.22, 10, 72), neon);
+            ring.position.set(cx, fy + 6, z0 + h + 2.2);
+            this.group.add(ring);
+            var ring2 = new THREE.Mesh(new THREE.TorusBufferGeometry(9.3, 0.08, 8, 72), this.glow(C.cream));
+            ring2.position.copy(ring.position);
+            this.group.add(ring2);
+
+            // ---- interior -----------------------------------------------------
+            var iw = w - 2 * t, id = d - 2 * t;
+            this.floorPlane(iw, id, this.brand("#0b0a08", { roughness : 0.12, metalness : 0.35 }), cx, cy, z0 + 0.03);
+            // raw concrete walls, warmed towards dust beige
+            this.wallPlane(iw, h, this.concrete(2, 1.5, "#e2d8c6"), cx, by - t - 0.02, z0 + h / 2, 0);
+            this.wallPlane(id, h, this.concrete(1.4, 1.5, "#e2d8c6"), x0 + t + 0.02, cy, z0 + h / 2, Math.PI / 2);
+            this.wallPlane(id, h, this.concrete(1.4, 1.5, "#e2d8c6"), x1 - t - 0.02, cy, z0 + h / 2, -Math.PI / 2);
+            // dark skirting and a brass line round the room
+            this.box(iw, 0.1, 0.5, cx, by - t - 0.05, z0, black, false);
+            this.box(0.1, id, 0.5, x0 + t + 0.05, cy, z0, black, false);
+            this.box(0.1, id, 0.5, x1 - t - 0.05, cy, z0, black, false);
+            this.box(iw, 0.06, 0.06, cx, by - t - 0.05, z0 + 8.2, brass, false);
+            // ceiling with light slots
+            var ceiling = this.floorPlane(iw, id, this.brand("#070605"), cx, cy, z0 + h - 0.02);
             ceiling.rotation.x = Math.PI;
-
-            // logo: big on the facade, on the back wall inside, and on a roof sign
-            var logoMaterial = (color, bg) =>
+            [-12, -4, 4, 12].forEach((lx) => this.box(0.5, id - 3, 0.1, cx + lx, cy, z0 + h - 0.14, warm, false));
+            // chandelier: the logo's ring, three times
+            [[4.2, 10.4, C.cream], [3.1, 9.5, C.orange], [2.0, 8.6, C.cream]].forEach((r) =>
             {
-                var cv = this.canvas(512, 512), ctx = cv.getContext("2d");
-                if (bg) { ctx.fillStyle = bg; ctx.fillRect(0, 0, 512, 512); }
-                var tex = this.texture(cv);
-                this.withLogo((img) => { this.drawLogo(ctx, img, 16, 16, 480, color); tex.needsUpdate = true; });
-                return new THREE.MeshBasicMaterial({ map : tex, transparent : !bg, side : THREE.DoubleSide });
-            };
-            this.wallPlane(4.6, 4.6, logoMaterial("#ffffff"), cx - 11.5, front_y - 0.04, z0 + 6.4, 0);
-            this.wallPlane(4.6, 4.6, logoMaterial("#ffffff"), cx + 11.5, front_y - 0.04, z0 + 6.4, 0);
-            this.wallPlane(6.5, 6.5, logoMaterial("#141414"), cx, back_y - t - 0.05, z0 + 4.8, 0);
-
-            // name over the door
-            this.wallPlane(15, 2.5, new THREE.MeshBasicMaterial({ map : this.signTexture("BLUFF", "#0e0e0f", "#ffffff", true) }),
-                cx, front_y - 0.05, z0 + 5.6, 0);
-
-            // roof sign: the logo on a black disc, turning slowly
-            this.box(0.5, 0.5, 2.2, cx, cy - 6, z0 + h + 0.5, this.matte(C.ink), false);
-            var disc = new THREE.Mesh(new THREE.CylinderBufferGeometry(4.2, 4.2, 0.4, 48), this.matte("#0e0e0f"));
-            var sign = new THREE.Group();
-            sign.position.set(cx, cy - 6, z0 + h + 6.6);
-            sign.add(disc);
-            [1, -1].forEach((s) =>
-            {
-                var face = new THREE.Mesh(new THREE.PlaneBufferGeometry(7.4, 7.4), logoMaterial("#ffffff"));
-                face.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), s > 0 ? 0 : Math.PI)
-                    .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2));
-                face.position.y = -0.22 * s;
-                sign.add(face);
+                var torus = new THREE.Mesh(new THREE.TorusBufferGeometry(r[0], 0.09, 8, 64), this.glow(r[2]));
+                torus.position.set(cx, cy - 1, z0 + r[1]);
+                this.group.add(torus);
+                this.spinners.push(torus);
             });
-            this.group.add(sign);
-            this.spinners.push(sign);
+            this.box(0.04, 0.04, h - 10.4, cx, cy - 1, z0 + 10.4, brass, false);
 
-            // display tables with the bag on them
-            var table = this.matte("#141414");
-            var spots = [[-9, 50], [9, 50], [-9, 57], [9, 57], [0, 55]];
-            spots.forEach((p, i) =>
-            {
-                this.box(3, 1.6, 0.9, cx + p[0], p[1], z0, table, true);
-                var bag = Bag.create();
-                bag.scale.setScalar(0.045);
-                bag.rotation.x = Math.PI / 2;                 // stand the loop upright
-                var holder = new THREE.Group();
-                holder.position.set(cx + p[0], p[1], z0 + 1.75);
-                holder.rotation.z = i * 0.9;
-                holder.add(bag);
-                this.group.add(holder);
-                if (i == 4) this.spinners.push(holder);
-            });
-
-            // warm light inside so the room reads from the street
-            var lamp = new THREE.PointLight(0xfff1d6, 0.5, 40, 2);
-            lamp.position.set(cx, cy, z0 + h - 1.5);
+            var lamp = new THREE.PointLight(0xffe6c0, 0.5, 28, 2);
+            lamp.position.set(cx, cy - 1, z0 + 8);
             this.group.add(lamp);
 
+            // orange runner from the plaza to the centrepiece
+            this.floorPlane(door - 0.6, 8.5, this.brand(C.orange, { roughness : 0.95 }), cx, fy + 4.4, z0 + 0.05);
+            var rug = new THREE.Mesh(new THREE.CircleBufferGeometry(3.6, 48), this.brand(C.hairline, { roughness : 0.95 }));
+            rug.position.set(cx, cy - 1, z0 + 0.06);
+            this.group.add(rug);
+            var rug_ring = new THREE.Mesh(new THREE.RingBufferGeometry(3.6, 3.75, 64), this.glow(C.orange));
+            rug_ring.position.set(cx, cy - 1, z0 + 0.065);
+            this.group.add(rug_ring);
+
+            // centrepiece: tall glass case with a turning bag
+            this.vitrine(cx, cy - 1, C.clay, { size : 1.9, plinth : 0.85, tall : 2.5, base : C.washed, spin : true });
+
+            // west wall: bags hanging on brass rails in lit niches, one colourway each
+            for (var i = 0; i < 8; i++)
+            {
+                var bc = BAG_COLOURS[i % BAG_COLOURS.length];
+                var y = fy + 3.2 + i * 2.5, wx = x0 + t;
+                this.wallPlane(1.9, 2.5, this.brand("#1a1815"), wx + 0.04, y, z0 + 1.95, Math.PI / 2);
+                this.box(0.06, 1.9, 0.06, wx + 0.07, y, z0 + 3.2, warm, false);
+                this.box(0.34, 0.05, 0.05, wx + 0.17, y, z0 + 2.7, brass, false);
+                this.displayBag(bc.color, wx + 0.36, y, z0 + 2.67, 0.03, 0, false);
+                this.wallPlane(1.8, 0.2, this.textMaterial(bc.name + " / 0" + (i % BAG_COLOURS.length + 1), { fg : C.cream, mono : true, w : 512, h : 64, size : 0.62 }),
+                    wx + 0.06, y, z0 + 0.98, Math.PI / 2);
+            }
+            // a long low shelf under them with folded dust bags
+            this.box(0.7, 19.5, 0.5, x0 + t + 0.4, fy + 12, z0, black, true);
+
+            // east side: glass cases on plinths in two rows, campaign wall behind them
+            for (var j = 0; j < 6; j++)
+            {
+                var c = BAG_COLOURS[(j + 1) % BAG_COLOURS.length];
+                this.vitrine(x1 - 3.2 - (j % 2) * 3.4, fy + 3.5 + Math.floor(j / 2) * 4.2 + (j % 2) * 2.1, c.color, { rotZ : Math.PI / 2 });
+            }
+            var poster = this.drawnTexture(768, 1024, (ctx, W, H, img) =>
+            {
+                ctx.fillStyle = C.orange; ctx.fillRect(0, 0, W, H);
+                if (img) this.drawLogo(ctx, img, W * 0.14, H * 0.08, W * 0.72, C.washed);
+                ctx.fillStyle = C.washed; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+                ctx.font = Math.round(H * 0.12) + "px " + FONT_MARK;
+                ctx.fillText("NOTHING", W / 2, H * 0.72, W * 0.9);
+                ctx.fillText("TO PROVE.", W / 2, H * 0.84, W * 0.9);
+                ctx.font = "600 " + Math.round(H * 0.022) + "px " + FONT_MONO;
+                ctx.fillText("BLUFF  •  EST. 2026  •  BLUFF.508.WORLD", W / 2, H * 0.95, W * 0.9);
+            });
+            this.wallPlane(7.5, 10, new THREE.MeshBasicMaterial({ map : poster }), x1 - t - 0.1, cy - 2, z0 + 8.2, -Math.PI / 2);
+            this.box(0.12, 7.9, 10.4, x1 - t, cy - 2, z0 + 3.0, black, false);
+
+            // back wall: glowing logo over the cash desk
+            var halo = new THREE.Mesh(new THREE.CircleBufferGeometry(4.3, 64), this.glow(C.orange));
+            halo.position.set(cx, by - t - 0.06, z0 + 9.4);
+            halo.rotation.x = Math.PI / 2;
+            this.group.add(halo);
+            this.wallPlane(7.2, 7.2, this.logoMaterial(C.washed), cx, by - t - 0.1, z0 + 9.4, 0);
+            this.wallPlane(11, 1.1, this.textMaterial("NOTHING TO PROVE.", { fg : C.washed, size : 0.8 }), cx, by - t - 0.08, z0 + 4.5, 0);
+
+            // cash desk, till and cashier
+            var desk_y = by - 4.2;
+            var dh = 0.92;
+            this.box(9, 1.5, dh, cx, desk_y, z0, black, true);
+            this.box(9.3, 1.8, 0.08, cx, desk_y, z0 + dh, this.brand(C.beige, { roughness : 0.35 }), false);
+            this.wallPlane(8.6, 0.6, this.textMaterial("CASH DESK", { fg : C.orange, mono : true, w : 512, h : 64, size : 0.66 }), cx, desk_y - 0.78, z0 + 0.5, 0);
+            this.box(0.6, 0.45, 0.3, cx + 2.6, desk_y, z0 + dh + 0.08, this.brand("#1c1a17"), false);          // till
+            this.box(0.6, 0.04, 0.4, cx + 2.6, desk_y + 0.2, z0 + dh + 0.38, this.glow("#9fd6ff"), false);    // screen
+            this.box(0.5, 0.3, 0.55, cx - 2.8, desk_y, z0 + dh + 0.08, this.brand(C.orange), false);          // shopping bag
+            this.person({ x : cx + 1.2, y : desk_y + 1.7, phi : 0, name : "Cashier", bag : C.clay,
+                shirt : C.washed, pants : C.stone, skin : "#8d5b3e",
+                lines : ["Welcome to BLUFF. Nothing to prove.", "Five colours in store today. Washed Black sells out first.", "Card or cash, whenever you're ready."] });
+
+            // sales person on the floor
+            this.person({ x : cx - 5.5, y : fy + 6.5, phi : 0, name : "Sales", bag : C.olive,
+                shirt : C.cream, pants : C.washed, skin : "#c79a78", hair : "#3a2a1c",
+                lines : ["Try one on. It sits across the body, pouch at the back.", "The centre case is Burnt Clay, new this season.", "Play BLUFF RUN at the booth outside. Grab every logo to win."] });
+
+            // lounge bench
+            this.box(5, 1.5, 0.5, cx - 7.5, by - 5, z0, this.brand(C.stone, { roughness : 0.6 }), true);
+            this.box(5, 0.3, 0.6, cx - 7.5, by - 4.3, z0 + 0.5, this.brand(C.stone, { roughness : 0.6 }), false);
+
             // one bag on a plinth out on the plaza
-            this.box(1.6, 1.6, 1.2, -13, 39, z0, table, true);
-            var plaza_bag = Bag.create();
-            plaza_bag.scale.setScalar(0.05);
-            plaza_bag.rotation.x = Math.PI / 2;
-            var plaza_holder = new THREE.Group();
-            plaza_holder.position.set(-13, 39, z0 + 2.2);
-            plaza_holder.add(plaza_bag);
-            this.group.add(plaza_holder);
-            this.spinners.push(plaza_holder);
+            this.vitrine(-13, 39, C.washed, { size : 1.6, plinth : 0.95, tall : 2.0, base : C.washed, spin : true });
+            this.vitrine(13, 39, C.beige, { size : 1.6, plinth : 0.95, tall : 2.0, base : C.washed, spin : true });
+
+            // graffiti on the store's east side wall, facing the park
+            var w2 = 12, h2 = 4;
+            this.wallPlane(w2, h2, new THREE.MeshStandardMaterial({ map : this.graffitiTexture(w2, h2), roughness : 0.95 }),
+                x1 + 0.05, cy, DECK_Z + 2.4, Math.PI / 2);
         },
 
         // ====================================================================
-        //  Parks either side of the store: graffiti wall (west), trees (east)
+        //  Activation booth beside the store: BLUFF RUN
+        // ====================================================================
+
+        buildBooth : function()
+        {
+            var bx = this.booth.x, by = this.booth.y, z0 = DECK_Z;
+            var black = this.brand(C.washed), neon = this.glow(C.orange);
+
+            // counter with an orange face
+            this.box(6.4, 1.2, 1.1, bx, by, z0, black, true);
+            this.box(6.6, 1.4, 0.08, bx, by, z0 + 1.1, this.brand(C.beige, { roughness : 0.4 }), false);
+            this.wallPlane(6.4, 1.0, this.textMaterial("PRESS  E  TO  PLAY", { fg : C.washed, bg : C.orange, mono : true, w : 1024, h : 160, size : 0.5 }),
+                bx, by - 0.62, z0 + 0.55, 0);
+
+            // frame and striped canopy
+            [[-3.3, -0.9], [3.3, -0.9], [-3.3, 2.9], [3.3, 2.9]].forEach((p) => this.box(0.18, 0.18, 4.4, bx + p[0], by + p[1], z0, black, true));
+            var stripes = this.drawnTexture(256, 256, (ctx, W, H) =>
+            {
+                for (var i = 0; i < 8; i++) { ctx.fillStyle = i % 2 ? C.washed : C.orange; ctx.fillRect(i * W / 8, 0, W / 8, H); }
+            });
+            var top = new THREE.MeshStandardMaterial({ map : stripes, roughness : 0.9 });
+            this.box(7.4, 4.6, 0.22, bx, by + 1.0, z0 + 4.4, [black, black, black, black, top, top], false);
+            this.wallPlane(7.4, 1.3, this.textMaterial("BLUFF RUN", { fg : C.cream, bg : C.washed, w : 1024, h : 180, size : 0.8 }), bx, by - 1.32, z0 + 3.9, 0);
+            this.box(7.4, 0.1, 0.1, bx, by - 1.34, z0 + 3.2, neon, false);
+
+            // back board with the rules
+            this.box(6.6, 0.2, 3.2, bx, by + 2.9, z0 + 0.9, black, true);
+            var rules = this.drawnTexture(1024, 512, (ctx, W, H, img) =>
+            {
+                ctx.fillStyle = C.washed; ctx.fillRect(0, 0, W, H);
+                if (img) this.drawLogo(ctx, img, 30, 96, 320, C.orange);
+                ctx.fillStyle = C.cream; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+                ctx.font = "92px " + FONT_MARK;
+                ctx.fillText("GRAB " + this.game.total + " LOGOS", 380, 130, 610);
+                ctx.fillStyle = C.orange;
+                ctx.fillText("BEAT THE CLOCK", 380, 250, 610);
+                ctx.fillStyle = C.stone;
+                ctx.font = "600 34px " + FONT_MONO;
+                ctx.fillText(this.game.limit + " SECONDS  /  RUN THE BLOCK", 380, 360, 610);
+                ctx.fillText("FASTEST TIME GOES ON THE BOARD", 380, 420, 610);
+            });
+            this.wallPlane(6.4, 3.2, new THREE.MeshBasicMaterial({ map : rules }), bx, by + 2.78, z0 + 2.5, 0);
+
+            // prize bags hanging from the canopy
+            [C.clay, C.olive, C.beige].forEach((c, i) => this.displayBag(c, bx - 2 + i * 2, by + 0.2, z0 + 4.25, 0.03, Math.PI / 2, false));
+
+            // attendant
+            this.person({ x : bx, y : by + 1.6, phi : 0, name : "Booth", bag : C.stone, shirt : C.orange, pants : C.washed, skin : "#a8734f",
+                lines : ["Step up! Grab every logo before the clock runs out.", "Press E when you're ready to run."] });
+
+            // a big token turning on the roof of the booth
+            var coin = this.token(bx, by + 1.0, z0 + 6.2, 1.5);
+            coin.visible = true;
+
+            // the logos you collect: placed around the plaza, the park and the graffiti yard
+            this.game.spots.forEach((p) => this.game.tokens.push(this.token(p[0], p[1], z0 + 1.25, 0.62)));
+        },
+
+        // spinning logo coin
+        token : function(x, y, z, r)
+        {
+            var holder = new THREE.Group();
+            holder.position.set(x, y, z);
+            var disc = new THREE.Mesh(new THREE.CylinderBufferGeometry(r, r, r * 0.16, 32), this.glow(C.orange));
+            holder.add(disc);                                   // cylinder axis is Y: faces look along +-Y
+            if (!this.token_face) this.token_face = this.logoMaterial(C.washed);
+            [1, -1].forEach((s) =>
+            {
+                var face = new THREE.Mesh(new THREE.PlaneBufferGeometry(r * 1.7, r * 1.7), this.token_face);
+                face.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), s > 0 ? 0 : Math.PI)
+                    .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2));
+                face.position.y = -(r * 0.08 + 0.01) * s;
+                holder.add(face);
+            });
+            holder.visible = false;
+            this.group.add(holder);
+            this.spinners.push(holder);
+            return holder;
+        },
+
+        // ====================================================================
+        //  On-screen messages and the BLUFF RUN game
+        // ====================================================================
+
+        buildHud : function()
+        {
+            var make = (css) =>
+            {
+                var el = document.createElement("div");
+                el.style.cssText = "position:fixed;left:50%;transform:translateX(-50%);z-index:20;pointer-events:none;display:none;" +
+                    "background:rgba(18,17,15,0.88);color:#e8e3d8;border:1px solid #ff4e00;padding:10px 22px;text-align:center;" +
+                    "font-family:'IBM Plex Mono',monospace;letter-spacing:0.08em;" + css;
+                document.body.appendChild(el);
+                return el;
+            };
+            this.hud_top = make("top:18px;font-size:20px;");
+            this.hud_msg = make("bottom:9%;font-size:16px;max-width:80%;");
+            document.addEventListener("keydown", (e) =>
+            {
+                var a = document.activeElement;
+                if (a && (a.tagName == "INPUT" || a.tagName == "TEXTAREA")) return;
+                if (e.code == "KeyE" && this.near_booth && !this.game.running) this.startGame();
+            });
+        },
+
+        show : function(el, html)
+        {
+            if (html === null) { if (el.style.display != "none") el.style.display = "none"; return; }
+            if (el.innerHTML != html) el.innerHTML = html;
+            if (el.style.display != "block") el.style.display = "block";
+        },
+
+        startGame : function()
+        {
+            var g = this.game;
+            g.running = true; g.score = 0; g.time = 0; g.result = null;
+            g.tokens.forEach((t) => { t.visible = true; });
+        },
+
+        endGame : function(won)
+        {
+            var g = this.game;
+            g.running = false;
+            g.tokens.forEach((t) => { t.visible = false; });
+            var best = null;
+            try { best = parseFloat(localStorage.getItem("bluff_run_best")); } catch (e) {}
+            if (won)
+            {
+                if (!(best > 0) || g.time < best)
+                {
+                    best = g.time;
+                    try { localStorage.setItem("bluff_run_best", String(best)); } catch (e) {}
+                }
+                g.result = "<span style=\"font-family:'Permanent Marker',cursive;font-size:30px;color:#ff4e00\">NOTHING TO PROVE.</span><br>" +
+                    "All " + g.total + " logos in " + g.time.toFixed(1) + "s &nbsp;•&nbsp; best " + best.toFixed(1) + "s";
+            } else
+            {
+                g.result = "<span style=\"font-family:'Permanent Marker',cursive;font-size:30px;color:#ff4e00\">TIME'S UP</span><br>" +
+                    g.score + " / " + g.total + " logos &nbsp;•&nbsp; back to the booth to run it again";
+            }
+            g.result_until = 6;
+        },
+
+        updateGame : function(delta, pos)
+        {
+            var g = this.game;
+            if (g.running)
+            {
+                g.time += delta;
+                for (var i = 0; i < g.tokens.length; i++)
+                {
+                    var t = g.tokens[i];
+                    if (t.visible && Math.abs(pos.x - t.position.x) < 1.3 && Math.abs(pos.y - t.position.y) < 1.3 && Math.abs(pos.z - DECK_Z) < 3)
+                    {
+                        t.visible = false;
+                        g.score++;
+                    }
+                }
+                var left = Math.max(0, g.limit - g.time);
+                this.show(this.hud_top, "BLUFF RUN &nbsp; <span style=\"color:#ff4e00\">" + g.score + " / " + g.total + "</span> &nbsp; " + left.toFixed(1) + "s");
+                if (g.score >= g.total) this.endGame(true);
+                else if (left <= 0) this.endGame(false);
+            } else if (g.result)
+            {
+                this.show(this.hud_top, g.result);
+                g.result_until -= delta;
+                if (g.result_until <= 0) g.result = null;
+            } else
+            {
+                this.show(this.hud_top, null);
+            }
+        },
+
+        updatePeople : function(delta, pos)
+        {
+            var nearest = null, nearest_d = 4.2;
+            for (var i = 0; i < this.npcs.length; i++)
+            {
+                var n = this.npcs[i], p = n.group.position;
+                var dx = pos.x - p.x, dy = pos.y - p.y, dist = Math.sqrt(dx * dx + dy * dy);
+                var near = dist < 9 && Math.abs(pos.z - p.z) < 3;
+                // turn to face the player when they are close, otherwise look ahead
+                var target = (near && n.turn) ? Math.atan2(dx, -dy) : n.home;
+                var diff = Math.atan2(Math.sin(target - n.group.rotation.z), Math.cos(target - n.group.rotation.z));
+                diff = Math.max(-1.1, Math.min(1.1, diff + n.group.rotation.z - n.home)) + n.home - n.group.rotation.z;
+                n.group.rotation.z += diff * Math.min(1, delta * 4);
+                // small idle movement
+                n.head.rotation.x = Math.sin(this.clock * 1.3 + i * 2.1) * 0.05;
+                n.head.rotation.z = Math.sin(this.clock * 0.5 + i) * 0.12;
+                if (near && dist < nearest_d) { nearest = n; nearest_d = dist; }
+            }
+            if (nearest !== this.talking)
+            {
+                if (nearest) nearest.line = (nearest.line + 1) % nearest.lines.length;
+                this.talking = nearest;
+            }
+            return nearest;
+        },
+
+        // ====================================================================
+        //  Parks: graffiti yard (west of the store) and Bluff Park (east)
         // ====================================================================
 
         graffitiTexture : function(w, h, big)
@@ -640,59 +1222,58 @@ define(["three", "scene", "physics", "bag"], (THREE, scene, Physics, Bag) =>
                 ctx.fillStyle = g;
                 ctx.fillRect(x - r, y - r, r * 2, r * 2);
             };
-            cloud(W * 0.5, H * 0.5, H * 0.75, "rgba(20,20,20,0.85)");
-            cloud(W * 0.2, H * 0.55, H * 0.45, "rgba(228,71,43,0.55)");
-            cloud(W * 0.82, H * 0.45, H * 0.5, "rgba(255,225,77,0.45)");
+            cloud(W * 0.5, H * 0.5, H * 0.75, "rgba(18,17,15,0.85)");
+            cloud(W * 0.2, H * 0.55, H * 0.45, "rgba(255,78,0,0.6)");
+            cloud(W * 0.82, H * 0.45, H * 0.5, "rgba(182,82,31,0.55)");
 
-            // tags
-            ctx.save();
-            ctx.font = "900 " + Math.round(H * 0.3) + "px 'Arial Black', Impact, sans-serif";
-            ctx.textBaseline = "middle"; ctx.textAlign = "center";
-            ctx.lineJoin = "round";
-            var tag = (text, x, y, rot, fill, stroke) =>
+            var tex = this.texture(cv);
+            var paint = () =>
             {
+                // tags
                 ctx.save();
-                ctx.translate(x, y); ctx.rotate(rot); ctx.transform(1, 0, -0.18, 1, 0, 0);
-                ctx.lineWidth = H * 0.045; ctx.strokeStyle = stroke; ctx.strokeText(text, 0, 0);
-                ctx.fillStyle = fill; ctx.fillText(text, 0, 0);
+                ctx.font = Math.round(H * 0.3) + "px " + FONT_MARK;
+                ctx.textBaseline = "middle"; ctx.textAlign = "center";
+                ctx.lineJoin = "round";
+                var tag = (text, x, y, rot, fill, stroke) =>
+                {
+                    ctx.save();
+                    ctx.translate(x, y); ctx.rotate(rot);
+                    ctx.lineWidth = H * 0.045; ctx.strokeStyle = stroke; ctx.strokeText(text, 0, 0, W * 0.3);
+                    ctx.fillStyle = fill; ctx.fillText(text, 0, 0, W * 0.3);
+                    ctx.restore();
+                };
+                tag("BLUFF", W * 0.19, H * 0.52, -0.08, C.cream, C.washed);
+                tag("WRLD", W * 0.82, H * 0.5, 0.06, C.orange, C.washed);
                 ctx.restore();
+                tex.needsUpdate = true;
             };
-            tag("BLUFF", W * 0.2, H * 0.52, -0.08, "#ffffff", "#141414");
-            tag("WRLD", W * 0.82, H * 0.5, 0.06, "#ffe14d", "#141414");
-            ctx.restore();
+            this.onFonts(paint);
 
-            // drips
-            var drips = () =>
+            this.withLogo((img) =>
             {
-                ctx.fillStyle = "rgba(255,255,255,0.9)";
+                var size = H * 0.92;
+                // dark outline, then the logo itself, then drips
+                this.drawLogo(ctx, img, W / 2 - size / 2 - 6, H * 0.04 - 6, size + 12, C.washed, 0.9);
+                this.drawLogo(ctx, img, W / 2 - size / 2, H * 0.04, size, C.cream, 1);
+                ctx.fillStyle = "rgba(232,227,216,0.9)";
                 for (var k = 0; k < 9; k++)
                 {
                     var dx = W * 0.4 + this.random() * W * 0.2, len = H * (0.08 + this.random() * 0.22);
                     ctx.fillRect(dx, H * 0.78, 4, len);
                     ctx.beginPath(); ctx.arc(dx + 2, H * 0.78 + len, 4, 0, Math.PI * 2); ctx.fill();
                 }
-            };
-
-            var tex = this.texture(cv);
-            this.withLogo((img) =>
-            {
-                var size = H * 0.92;
-                // soft white halo, then the logo itself
-                this.drawLogo(ctx, img, W / 2 - size / 2 - 6, H * 0.04 - 6, size + 12, "#141414", 0.9);
-                this.drawLogo(ctx, img, W / 2 - size / 2, H * 0.04, size, "#ffffff", 1);
-                drips();
                 tex.needsUpdate = true;
             });
             return tex;
         },
 
-        tree : function(x, y, scale)
+        tree : function(x, y, scale, leaf)
         {
             var trunk = new THREE.Mesh(new THREE.CylinderBufferGeometry(0.18 * scale, 0.26 * scale, 2.2 * scale, 8), this.matte("#3a2f28"));
             trunk.rotation.x = Math.PI / 2;
             trunk.position.set(x, y, DECK_Z + 1.1 * scale);
             this.group.add(trunk);
-            var leaves = this.matte("#1f3d2b");
+            var leaves = this.brand(leaf || "#2f5a36");
             [[1.7, 2.6], [1.3, 3.8], [0.8, 4.8]].forEach((l) =>
             {
                 var blob = new THREE.Mesh(new THREE.IcosahedronBufferGeometry(l[0] * scale, 1), leaves);
@@ -702,29 +1283,111 @@ define(["three", "scene", "physics", "bag"], (THREE, scene, Physics, Bag) =>
             this.collider(0.6 * scale, 0.6 * scale, 4, new THREE.Vector3(x, y, DECK_Z + 2));
         },
 
+        bench : function(x, y, phi)
+        {
+            var wood = this.brand(C.clay, { roughness : 0.7 }), iron = this.brand(C.washed);
+            this.box(3.0, 0.8, 0.12, x, y, DECK_Z + 0.42, wood, false, phi);
+            this.box(3.0, 0.8, 0.42, x, y, DECK_Z, iron, true, phi);
+            var nx = Math.sin(phi), ny = -Math.cos(phi);
+            this.box(3.0, 0.12, 0.6, x - nx * 0.38, y - ny * 0.38, DECK_Z + 0.54, wood, false, phi);
+        },
+
+        parkLamp : function(x, y)
+        {
+            this.box(0.14, 0.14, 3.4, x, y, DECK_Z, this.brand(C.washed), false);
+            var b = new THREE.Mesh(new THREE.SphereBufferGeometry(0.3, 12, 8), this.glow("#fff0d2"));
+            b.position.set(x, y, DECK_Z + 3.6);
+            this.group.add(b);
+        },
+
+        flowerBed : function(x, y, w, d)
+        {
+            this.box(w, d, 0.35, x, y, DECK_Z, this.brand(C.stone, { roughness : 0.8 }), true);
+            var colours = [C.orange, C.clay, C.cream, "#e9b949"];
+            for (var i = 0; i < w * d * 2.2; i++)
+            {
+                var f = new THREE.Mesh(new THREE.IcosahedronBufferGeometry(0.16 + this.random() * 0.1, 0),
+                    this.brand(colours[Math.floor(this.random() * colours.length)]));
+                f.position.set(x + (this.random() - 0.5) * (w - 0.4), y + (this.random() - 0.5) * (d - 0.4), DECK_Z + 0.5 + this.random() * 0.15);
+                this.group.add(f);
+            }
+        },
+
         buildParks : function()
         {
-            // west park: free-standing graffiti wall facing the plaza
+            // ---- graffiti yard, west of the store ------------------------------
             var w = 26, h = 6.5;
-            this.box(w, 0.8, h, -43, 58, DECK_Z, this.matte("#8e8a82"), true);
+            this.box(w, 0.8, h, -43, 64, DECK_Z, this.concrete(2, 1), true);
             this.wallPlane(w, h, new THREE.MeshStandardMaterial({ map : this.graffitiTexture(w, h), roughness : 0.95 }),
-                -43, 58 - 0.42, DECK_Z + h / 2, 0);
-            this.tree(-60, 46, 1.2);
-            this.tree(-26, 44, 1.0);
+                -43, 64 - 0.42, DECK_Z + h / 2, 0);
+            this.tree(-63, 40, 1.2);
+            this.tree(-62, 60, 1.0);
+            this.bench(-43, 52, Math.PI);
 
-            // a second, smaller piece on the side wall of the store's alley
-            var w2 = 12, h2 = 4;
-            this.wallPlane(w2, h2, new THREE.MeshStandardMaterial({ map : this.graffitiTexture(w2, h2), roughness : 0.95 }),
-                17.05, 53, DECK_Z + 2.4, Math.PI / 2);
+            // ---- Bluff Park, east of the store ---------------------------------
+            var P = this.park;
+            // gateway arch on the path from the plaza
+            var black = this.brand(C.washed);
+            this.box(0.4, 0.4, 4.2, 22.5, P.path_y - 2.2, DECK_Z, black, true);
+            this.box(0.4, 0.4, 4.2, 22.5, P.path_y + 2.2, DECK_Z, black, true);
+            this.box(0.5, 5.2, 0.9, 22.5, P.path_y, DECK_Z + 4.2, black, false);
+            this.wallPlane(4.6, 0.75, this.textMaterial("BLUFF PARK", { fg : C.cream, w : 1024, h : 180, size : 0.8 }), 22.22, P.path_y, DECK_Z + 4.65, -Math.PI / 2);
 
-            // east park: trees and benches
-            var spots = [[30, 46], [40, 60], [52, 48], [62, 62], [46, 54], [28, 62], [60, 44]];
-            spots.forEach((p, i) => this.tree(p[0], p[1], 0.9 + (i % 3) * 0.25));
-            var bench = this.matte(C.charcoal);
-            [[36, 52], [54, 56]].forEach((p) =>
+            // pond: the logo's ring, with the logo standing in it
+            var rim = new THREE.Mesh(new THREE.TorusBufferGeometry(P.pond_r, 0.45, 10, 64), this.brand(C.cream, { roughness : 0.6 }));
+            rim.position.set(P.cx, P.cy, DECK_Z + 0.3);
+            this.group.add(rim);
+            var water = new THREE.Mesh(new THREE.CircleBufferGeometry(P.pond_r, 64),
+                new THREE.MeshStandardMaterial({ color : new THREE.Color("#2f6f7a").convertSRGBToLinear(), roughness : 0.08, metalness : 0.3, transparent : true, opacity : 0.88 }));
+            water.position.set(P.cx, P.cy, DECK_Z + 0.32);
+            this.group.add(water);
+            this.box(1.2, 1.2, 1.4, P.cx, P.cy, DECK_Z, this.brand(C.washed), false);
+            var statue = new THREE.Group();
+            statue.position.set(P.cx, P.cy, DECK_Z + 4.0);
+            var face = new THREE.Mesh(new THREE.PlaneBufferGeometry(5.2, 5.2), this.logoMaterial(C.orange));
+            face.rotation.x = Math.PI / 2;
+            statue.add(face);
+            this.group.add(statue);
+            this.spinners.push(statue);
+            // the pond blocks walking: 8 short wall pieces round the rim
+            for (var a = 0; a < 12; a++)
             {
-                this.box(3.2, 0.9, 0.5, p[0], p[1], DECK_Z, bench, true);
+                var ang = a / 12 * Math.PI * 2;
+                var q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), ang);
+                this.collider(0.8, P.pond_r * 0.56, 1.6, new THREE.Vector3(P.cx + Math.cos(ang) * P.pond_r, P.cy + Math.sin(ang) * P.pond_r, DECK_Z + 0.8), q);
+            }
+
+            // trees on the lawns
+            var greens = ["#2f5a36", "#3b6b3a", "#28503a", "#4a7340"];
+            [[27, 28], [34, 34], [28, 40], [58, 28], [64, 36], [55, 36], [27, 52], [33, 60], [27, 65], [38, 66],
+             [56, 54], [63, 60], [54, 65], [65, 50], [36, 27], [64, 27], [36, 54], [54, 27]].forEach((p, i) =>
+            {
+                this.tree(p[0], p[1], 0.85 + (i % 4) * 0.2, greens[i % greens.length]);
             });
+
+            // benches round the pond and along the paths
+            this.bench(P.cx - 10.2, P.cy + 5, Math.PI / 2);
+            this.bench(P.cx + 10.2, P.cy - 5, -Math.PI / 2);
+            this.bench(P.cx + 5, P.cy + 10.2, 0);
+            this.bench(P.cx - 5, P.cy - 10.2, Math.PI);
+            this.bench(30, P.path_y + 2.4, 0);
+            this.bench(60, P.path_y + 2.4, 0);
+
+            // flowers
+            this.flowerBed(P.cx - 7.4, P.cy - 7.4, 2.6, 2.6);
+            this.flowerBed(P.cx + 7.4, P.cy + 7.4, 2.6, 2.6);
+            this.flowerBed(P.cx + 7.4, P.cy - 7.4, 2.6, 2.6);
+            this.flowerBed(P.cx - 7.4, P.cy + 7.4, 2.6, 2.6);
+            this.flowerBed(24.5, 30, 1.4, 8);
+
+            // lamps
+            [[26, P.path_y - 2], [36, P.path_y + 2], [54, P.path_y - 2], [64, P.path_y + 2],
+             [P.cx - 2, 30], [P.cx + 2, 60], [P.cx + 2, 26], [P.cx - 2, 66]].forEach((p) => this.parkLamp(p[0], p[1]));
+
+            // picnic lawn: a blanket and the bag left on it
+            this.floorPlane(3.2, 2.4, this.brand(C.orange, { roughness : 0.95 }), 58, 60, DECK_Z + 0.07);
+            var picnic = this.displayBag(C.olive, 58.4, 60.2, DECK_Z + 0.5, 0.03, 0.6, false);
+            picnic.rotation.x = -1.2;
         },
 
         // ====================================================================
