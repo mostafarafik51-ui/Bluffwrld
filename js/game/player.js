@@ -779,12 +779,16 @@ define(["three", "gltfLoader", "dracoLoader", "animator", "collider", "ray",
                     camera.position.y = this.threeObj.position.y + THREE.MathUtils.lerp(offset.y, offset.y * 0.05, t_xy)
                 }
                 var t_z = (this.look_direction.z + 1) / 2;
-                camera.position.z = this.threeObj.position.z + THREE.MathUtils.lerp(4, 0, t_z);
+                // looking up lowers the camera, but only to chest height: at 0 it sat on the
+                // ground and showed the world from underneath
+                camera.position.z = this.threeObj.position.z + THREE.MathUtils.lerp(4, 0.9, t_z);
 
                 if (t_z < 0.2)
                 {
                     camera.position.z -= THREE.MathUtils.lerp(1.0, 0.1, t_z * 5);
                 }
+                // never at or below the character's feet
+                camera.position.z = Math.max(camera.position.z, this.threeObj.position.z + 0.6);
             }
 
             // naive camera shake, need to slow this down so that it isnt every frame/
