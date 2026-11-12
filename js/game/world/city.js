@@ -103,6 +103,11 @@ define(["three", "scene", "physics", "bag", "gltfLoader"], (THREE, scene, Physic
             if (!player || !player.initialized) return;
             // player position in plan units
             var wp = player.threeObj.position;
+            // safety net: anyone who ends up below street level around the plateau
+            // (under the city or in the lake) is put back on the main street
+            var reach = HALF * K + 25;
+            if (wp.z < DECK_Z - 3 && Math.abs(wp.x) < reach && Math.abs(wp.y) < reach) this.respawn(player);
+            this.player = player;
             var pos = this.plan_pos.set(wp.x / K, wp.y / K, (wp.z - DECK_Z) / K + DECK_Z);
 
             this.updateGame(delta, pos);
@@ -122,6 +127,19 @@ define(["three", "scene", "physics", "bag", "gltfLoader"], (THREE, scene, Physic
             {
                 this.show(this.hud_msg, null);
             }
+        },
+
+        // put the player back on the main street
+        respawn : function(player)
+        {
+            var body = player.rigidbody;
+            if (!body || !body.getWorldTransform) return;
+            var off = player.rigidbody_offset;
+            var t = body.getWorldTransform();
+            t.setOrigin(new Physics.ammo.btVector3(this.spawn.x + off.x, this.spawn.y + off.y, this.spawn.z + off.z));
+            body.setWorldTransform(t);
+            body.getMotionState().setWorldTransform(t);
+            body.setLinearVelocity(new Physics.ammo.btVector3(0, 0, 0));
         },
 
         // height of the walkable city surface under (x, y), or -Infinity outside the city
@@ -1183,6 +1201,8 @@ define(["three", "scene", "physics", "bag", "gltfLoader"], (THREE, scene, Physic
                 var a = document.activeElement;
                 if (a && (a.tagName == "INPUT" || a.tagName == "TEXTAREA")) return;
                 if (e.code == "KeyE" && this.near_booth && !this.game.running) this.startGame();
+                // R: return to the city from anywhere
+                if (e.code == "KeyR" && this.player && this.player.initialized) this.respawn(this.player);
             });
         },
 

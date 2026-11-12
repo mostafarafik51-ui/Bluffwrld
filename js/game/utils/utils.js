@@ -14,7 +14,7 @@ define(["three", "ammo"], (THREE, Ammo) =>
         PLAYER_RUN_SPEED : 1000,
         PLAYER_WALK_SPEED_FAST : 3000,
         PLAYER_RUN_SPEED_FAST : 8000,
-        PLAYER_JUMP_FORCE : 150,
+        PLAYER_JUMP_FORCE : 32,     // was 150, which launched the player about 22 units up, over every wall and roof
         TIME_TO_FALL : 0.5,
         PLAYER_CAPSULE_RADIUS : 0.3,
         PLAYER_BOUNDING_RADIUS : 0.0,
