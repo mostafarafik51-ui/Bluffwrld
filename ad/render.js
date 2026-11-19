@@ -1,10 +1,11 @@
 // Renders the Bluff ad from the game, frame by frame.
-//   node ad/render.js <first frame> <last frame> <out dir> [fps]
+//   node ad/render.js <first frame> <last frame> <out dir> [fps] [director file]
 // Needs the game served at http://localhost:8000 (python3 -m http.server 8000 in the repo).
 const { chromium } = require("playwright");
 const path = require("path");
 const fs = require("fs");
-const [first, last, out, fpsArg] = process.argv.slice(2);
+const [first, last, out, fpsArg, directorArg] = process.argv.slice(2);
+const director = directorArg ? path.resolve(directorArg) : path.join(__dirname, "director.js");
 const fps = Number(fpsArg || 30);
 (async () =>
 {
@@ -21,7 +22,7 @@ const fps = Number(fpsArg || 30);
     }
     await page.evaluate(() => document.fonts.ready.then(() => Promise.all([document.fonts.load("64px 'Permanent Marker'"), document.fonts.load("600 32px 'IBM Plex Mono'")])));
     await page.waitForTimeout(3000);
-    await page.addScriptTag({ path : path.join(__dirname, "director.js") });
+    await page.addScriptTag({ path : director });
     await page.waitForFunction(() => window.AD && window.AD.ready, null, { timeout : 30000 });
     for (let f = Number(first); f <= Number(last); f++)
     {
