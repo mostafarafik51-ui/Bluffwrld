@@ -1,22 +1,24 @@
 # Full soundtrack for the store film: music, sound effects and the characters' voices.
 #   python3 ad/sound.py <out.wav>
 # Everything is synthesised here except the voices (ad/audio/*.wav, made by ad/voices.py).
+# Who speaks when comes from ad/dialogue.json. The script also writes ad/audio/lipsync.json,
+# the loudness of every line frame by frame, which moves the characters' mouths.
 #
-#  0.0   street: city ambience, a laid-back groove, her footsteps, the friends chatting
-#  4.0   "Wait."            the groove stops dead (needle off the record)
-#  5.15  "Where did you get that?"   in near-silence, just the street
-#  6.8   she points: a riser builds, "No way."
-#  8.8   the store: a deep hit, a wide shimmering pad, a whoosh with the crane
-# 10.6   inside: a door chime, the murmur of people starting to realise, a snare roll
-# 12.4   THE RUSH: the drop, hard drums and bass, a stampede of footsteps, shouts
-# 15.8   everything cuts: ambience, distant crowd noise from the store, her alone
-# 18.0   reverse swell into a final hit on the logo
+#  0.0   street: city ambience, a cool minimal beat (muted plucks, soft 808), her footsteps
+#  4.0   "Wait."            tape stop: the beat winds down and dies
+#  5.1   "Where did you get that?"   in near-silence, just the street
+#  6.8   she points: a heartbeat kick and a riser, "No way."
+#  8.8   the store: a huge cinematic braaam, a whoosh with the crane, a choir pad
+# 10.6   inside: a door chime, the murmur of people realising, hats rolling faster
+# 12.4   THE RUSH: a hard trap drop, sliding 808s, rolling hats, a stampede, shouts
+# 15.8   vinyl stop: ambience, distant crowd noise from the store, her alone
+# 18.0   reverse swell into a final braaam on the logo
 import sys, os, wave
 import numpy as np
 
 SR = 44100
 DUR = 21.0
-BPM = 120.0
+BPM = 140.0
 BEAT = 60.0 / BPM
 N = int(SR * DUR)
 L = np.zeros(N); R = np.zeros(N)
@@ -106,102 +108,144 @@ def beats(t0, t1, step_):
     while x < t1 - 1e-6: out.append(x); x += step_
     return out
 
-# ---- ambience: the city under everything ---------------------------------------------
+# ---- new instruments ---------------------------------------------------------------------
+import json
+def pluck(freq, length=0.35, muted=True):
+    n = int(length * SR); t = tt(n)
+    x = sum(np.sin(2 * np.pi * freq * h * t) / h ** 1.6 for h in (1, 2, 3, 4))
+    return x * env(n, 0.002, 0.06 if muted else 0.25)
+def sub808(f0, length, slide_to=None, drive=2.5):
+    n = int(length * SR); t = tt(n)
+    f = np.full(n, float(f0))
+    if slide_to: f = f0 + (slide_to - f0) * np.clip(t / 0.09, 0, 1)
+    ph = 2 * np.pi * np.cumsum(f) / SR
+    click = np.sin(2 * np.pi * np.cumsum(f * (1 + 2 * np.exp(-t / 0.01))) / SR) * np.exp(-t / 0.015)
+    return np.tanh(drive * (np.sin(ph) * np.minimum(1, t / 0.004) * np.exp(-t / (length * 0.9)) + 0.4 * click))
+def braaam(length=3.0, root=41.2):
+    n = int(length * SR); t = tt(n)
+    x = 0
+    for d in (-0.08, 0, 0.07, 0.15):                 # a stack of detuned saws, an octave and a fifth
+        for mult, a in ((1, 1.0), (2, 0.5), (3, 0.3)):
+            f = root * mult * (1 + d / 100 * mult)
+            x = x + a * (2 * ((f * t + d) % 1) - 1)
+    k = int(0.002 * SR) + 1
+    x = lowpass(x, 3 + int(40 * np.clip(t[-1], 0, 1)))  # dark, brassy
+    shape = np.minimum(1, t / 0.06) * np.exp(-t / (length * 0.55))
+    return np.tanh(0.8 * x * shape) + 0.6 * boom(length, root * 0.75)
+def choir(freqs, length):
+    n = int(length * SR); t = tt(n)
+    x = sum(np.sin(2 * np.pi * f * t + 0.4 * np.sin(2 * np.pi * 5.5 * t + f)) + 0.35 * np.sin(2 * np.pi * 3 * f * t) for f in freqs) / len(freqs)
+    breath = lowpass(rng.standard_normal(n), 10) * 0.15
+    return (x + breath) * np.minimum(1, t / 0.9) * np.minimum(1, (length - t) / 0.7)
+def heartbeat():
+    return kick(0.6)[: int(0.3 * SR)] * 0.9
+
+def tape_stop(sig, length):
+    # play sig slowing to a halt over `length` seconds
+    n = int(length * SR); t = tt(n)
+    speed = (1 - t / length) ** 1.5
+    pos = np.cumsum(speed)
+    pos = pos[pos < len(sig) - 1]
+    return np.interp(pos, np.arange(len(sig)), sig) * np.linspace(1, 0.3, len(pos))
+
+# ---- ambience: the city under everything -------------------------------------------------
 amb = lowpass(np.cumsum(rng.standard_normal(N)) * 0.002, 50)
 amb = amb - lowpass(amb, 4000)
 traffic = lowpass(rng.standard_normal(N), 120) * (0.6 + 0.4 * np.sin(2 * np.pi * 0.07 * np.arange(N) / SR))
 amb_level = np.ones(N)
-amb_level[int(8.8 * SR):int(12.4 * SR)] = 0.35            # inside the store / the reveal: quieter street
+amb_level[int(8.8 * SR):int(12.4 * SR)] = 0.35
 amb_level[int(18.4 * SR):] = 0.0
 add((amb * 6 + traffic * 0.5) * amb_level, 0, 0.5)
-for t0, pan in ((1.2, -0.6), (9.4, 0.5), (16.4, 0.7)):        # cars passing far away
+for t0, pan in ((1.2, -0.6), (9.4, 0.5), (16.4, 0.7)):
     add(lowpass(whoosh(3.0, 0.5), 30), t0, 0.12, pan)
+crackle = np.zeros(N); pops = rng.integers(0, int(4.0 * SR), 140); crackle[pops] = rng.uniform(-1, 1, len(pops))
+add(highpass(crackle, 2) * 0.5, 0, 0.12)
 
-# ---- 0.0 - 4.0: laid-back groove under the conversation ---------------------------------
+# ---- 0.0 - 4.0: cool minimal beat, built into its own buffer so it can tape-stop ---------
 GROOVE_END = 4.0
-for i, b in enumerate(beats(0.0, GROOVE_END, BEAT)):
-    add(kick(0.5), b, 0.3)
-    if i % 2 == 1: add(clap(), b, 0.18, 0.1)
-    add(hat(), b + BEAT / 2, 0.22, -0.3)
-for i, b in enumerate(beats(0.0, GROOVE_END, BEAT * 2)):
-    add(keys([220.0, 261.6, 329.6] if i % 2 == 0 else [196.0, 246.9, 293.7], BEAT * 1.9), b, 0.16)
-    add(bass(55.0 if i % 2 == 0 else 49.0, BEAT * 1.6, 1.4), b, 0.22)
-add(scratch(), GROOVE_END - 0.02, 0.45)
-# her footsteps while she walks (stops at ~5.1)
+groove = np.zeros(int((GROOVE_END + 0.6) * SR))
+def gadd(sig, at, gain=1.0):
+    i = int(at * SR); sig = sig[: len(groove) - i]; groove[i:i + len(sig)] += sig * gain
+melody = [523.3, 0, 622.3, 0, 587.3, 523.3, 0, 466.2, 523.3, 0, 392.0, 0, 466.2, 0, 523.3, 0]
+for i, b in enumerate(beats(0.0, GROOVE_END + 0.5, BEAT / 2)):
+    f = melody[i % len(melody)]
+    if f: gadd(pluck(f, 0.3), b, 0.11)
+for i, b in enumerate(beats(0.0, GROOVE_END + 0.5, BEAT)):
+    if i % 4 == 0: gadd(sub808(43.7, BEAT * 1.6, None, 1.6), b, 0.22)
+    if i % 4 == 2: gadd(snare(0.4), b, 0.13)
+    gadd(hat(), b + BEAT / 2, 0.12)
+    gadd(kick(0.45), b if i % 4 == 0 else b + 10, 0.2)
+add(groove[: int(GROOVE_END * SR)], 0, 1.0)
+add(tape_stop(groove[int(GROOVE_END * SR):], 0.55), GROOVE_END, 1.0)
 for i, b in enumerate(beats(0.25, 5.1, 0.535)):
     add(step(0.9, soft=True), b, 0.22, -0.2 if i % 2 else 0.2)
 
-# ---- 4.0 - 6.8: the question, in near-silence ------------------------------------------
-add(pad([110.0, 164.8], 2.9, 0.05), 4.1, 0.05)                   # a held breath of a pad
+# ---- 4.0 - 6.8: the question, in near-silence ----------------------------------------------
+add(pad([110.0, 164.8], 2.9, 0.05), 4.4, 0.04)
 
-# ---- 6.8 - 8.8: she points -------------------------------------------------------------
-add(riser(2.0), 6.8, 0.42)
-add(pad([73.4, 110.0, 146.8], 2.1, 0.2), 6.8, 0.15)
-for b in beats(8.2, 8.8, BEAT / 4):
-    add(snare(0.3), b, 0.08 + 0.35 * (b - 8.2))
+# ---- 6.8 - 8.8: she points: heartbeat and a riser ----------------------------------------
+for b in (6.9, 7.15, 7.75, 7.95, 8.45, 8.6):
+    add(heartbeat(), b, 0.5)
+add(riser(2.0), 6.8, 0.38)
 
-# ---- 8.8 - 12.4: the store ---------------------------------------------------------------
-add(boom(3.2, 30), 8.8, 0.85)
-add(whoosh(1.8, 0.35), 8.75, 0.35, -0.3)                        # the crane up the facade
-add(pad([65.4, 98.0, 130.8, 164.8, 196.0, 261.6], 3.7, 0.55), 8.8, 0.3)
-for i, b in enumerate(beats(9.2, 12.4, BEAT / 2)):               # shimmer
-    add(np.sin(2 * np.pi * [1046.5, 1318.5, 1568.0, 1318.5][i % 4] * tt(int(0.4 * SR))) * env(int(0.4 * SR), 0.003, 0.15), b, 0.05, 0.4 if i % 2 else -0.4)
-add(whoosh(1.4, 0.4), 10.5, 0.3, 0.3)                           # gliding in through the doors
-add(chime(), 10.75, 0.18, 0.2)
-for b in beats(9.8, 12.4, BEAT):
-    add(kick(0.7), b, 0.35)
-add(riser(1.5), 10.9, 0.45)
-for b in beats(11.4, 12.4, BEAT / 4):
-    add(snare(1.0), b, 0.05 + 0.4 * (b - 11.4))
+# ---- 8.8 - 12.4: the store ----------------------------------------------------------------
+add(braaam(3.4, 41.2), 8.8, 0.9)
+add(whoosh(1.8, 0.35), 8.75, 0.35, -0.3)
+add(choir([196.0, 246.9, 293.7, 392.0], 3.6), 8.9, 0.22)
+add(whoosh(1.4, 0.4), 10.5, 0.3, 0.3)
+add(chime(), 10.75, 0.16, 0.2)
+# hats rolling faster into the drop: 1/8, then 1/16, then 1/32
+for t0, t1, div, g in ((10.6, 11.4, 2, 0.12), (11.4, 12.0, 4, 0.16), (12.0, 12.4, 8, 0.2)):
+    for b in beats(t0, t1, BEAT / div): add(hat(), b, g, 0.2)
+add(riser(1.6), 10.8, 0.4)
 
-# ---- 12.4 - 15.8: the rush --------------------------------------------------------------
-add(boom(1.6, 40), 12.4, 0.75)
-notes = [55.0, 55.0, 65.4, 55.0, 73.4, 55.0, 65.4, 82.4]
-for i, b in enumerate(beats(12.4, 15.8, BEAT / 4)):
-    add(hat(i % 8 == 6), b, 0.32 if i % 2 else 0.2, 0.3 if i % 2 else -0.3)
-    if i % 2 == 0: add(bass(notes[(i // 2) % len(notes)], BEAT / 4 * 1.8, 4.5), b, 0.3)
-for i, b in enumerate(beats(12.4, 15.8, BEAT)):
-    add(kick(1.0), b, 0.7)
-    if i % 2 == 1: add(snare(1.0), b, 0.5); add(clap(), b, 0.25)
-add(pad([110.0, 130.8, 164.8], 3.4, 0.7), 12.4, 0.12)
-# the stampede: many feet, louder as they reach the camera, panned across
+# ---- 12.4 - 15.8: the rush: trap drop ---------------------------------------------------
+add(braaam(1.4, 55.0), 12.4, 0.45)
+bar = BEAT * 4
+pattern = [(0.0, 43.7, None), (0.75, 43.7, 49.0), (1.5, 49.0, None), (2.5, 43.7, 36.7), (3.25, 41.2, None)]
+for k, b0 in enumerate(beats(12.4, 15.8, bar)):
+    for off, f, slide in pattern:
+        at = b0 + off * BEAT
+        if at < 15.8: add(sub808(f, BEAT * 1.4, slide, 3.0), at, 0.5)
+    for off in (0.0, 0.75, 2.5):
+        if b0 + off * BEAT < 15.8: add(kick(1.0), b0 + off * BEAT, 0.6)
+    if b0 + 2 * BEAT < 15.8: add(snare(1.0), b0 + 2 * BEAT, 0.55); add(clap(), b0 + 2 * BEAT, 0.35)
+# hats: straight 1/8 with triplet rolls at the end of each bar
+for b0 in beats(12.4, 15.8, bar):
+    for b in beats(b0, b0 + 3 * BEAT, BEAT / 2): add(hat(), b, 0.25, 0.3)
+    for b in beats(b0 + 3 * BEAT, b0 + 4 * BEAT, BEAT / 6): add(hat(), b, 0.2, -0.3)
+add(choir([146.8, 196.0, 220.0], 3.4), 12.4, 0.08)
 for k in range(170):
     at = 12.45 + 3.3 * rng.random()
-    closeness = (at - 12.4) / 3.4
-    add(step(0.5 + rng.random() * 0.6), at, 0.12 + 0.3 * closeness, rng.uniform(-0.8, 0.8))
-for t0, pan in ((13.5, -0.5), (14.2, 0.6), (14.8, -0.2), (15.3, 0.4)):   # people tearing past the camera
+    add(step(0.5 + rng.random() * 0.6), at, 0.12 + 0.3 * (at - 12.4) / 3.4, rng.uniform(-0.8, 0.8))
+for t0, pan in ((13.5, -0.5), (14.2, 0.6), (14.8, -0.2), (15.3, 0.4)):
     add(whoosh(0.7, 0.55), t0, 0.35, pan)
 
-# ---- 15.8 - 18.4: alone -----------------------------------------------------------------
-add(hat(True), 15.8, 0.25)
-add(boom(1.2, 50), 15.8, 0.2)                                    # the drop pulls out under her
-add(pad([82.4, 123.5], 2.6, 0.05), 15.85, 0.07)
+# ---- 15.8 - 18.4: alone ------------------------------------------------------------------
+add(tape_stop(sub808(43.7, 1.0, None, 3.0), 0.5), 15.8, 0.4)
+add(pad([82.4, 123.5], 2.6, 0.05), 15.9, 0.06)
 
-# ---- 18.0 - 21.0: the logo ----------------------------------------------------------------
-rev = whoosh(0.45, 0.95)
-add(rev, 17.98, 0.4)
-add(boom(2.6, 30), 18.45, 0.95)
-add(chime(), 18.5, 0.08)
+# ---- 18.0 - 21.0: the logo --------------------------------------------------------------
+add(whoosh(0.45, 0.95), 17.98, 0.4)
+add(braaam(2.6, 36.7), 18.45, 0.9)
 
-# ---- voices -----------------------------------------------------------------------------
-def say(name, at, gain=1.0, pan=0.0, muffle=0):
-    v = load_voice(name)
-    if muffle: v = lowpass(v, muffle)
-    add(v, at, gain, pan)
-say("a_monday", 0.45, 0.75, 0.25)
-say("c_really", 2.2, 0.75, 0.15)
-say("b_wait", 4.05, 0.95, 0.1)
-say("b_where", 5.1, 1.0, 0.1)
-say("a_noway", 7.45, 0.6, 0.2)
-# people starting to realise (off screen, under the store shots)
-for i, at in enumerate([10.9, 11.15, 11.4, 11.6, 11.8, 12.0, 12.15]):
-    say("murmur_%02d" % i, at, 0.10 + 0.04 * i, (-0.6, 0.5, -0.2, 0.7, -0.5, 0.3, 0.0)[i], muffle=3)
-say("crowd_lets", 12.45, 0.55, 0.3)
-say("crowd_move", 12.95, 0.4, -0.5)
-say("crowd_wait", 13.7, 0.35, 0.6)
-# the crowd far away inside the store, while she stands alone
-for i, at in enumerate([16.0, 16.4, 16.9, 17.3]):
-    say("murmur_%02d" % (7 + i % 3), at, 0.07, (-0.3, 0.3, 0.0, -0.2)[i], muffle=8)
+# ---- voices (from ad/dialogue.json) and the mouth timing for the film --------------------
+dialogue = json.load(open(os.path.join(HERE, "dialogue.json")))["lines"]
+FPS = 30
+lips = []
+for d in dialogue:
+    v = load_voice(d["line"])
+    if d.get("muffle"): v = lowpass(v, d["muffle"])
+    add(v, d["at"], d["gain"], d.get("pan", 0))
+    if d.get("speaker"):
+        hop = SR // FPS
+        rms = np.array([np.sqrt(np.mean(v[i:i + hop] ** 2)) for i in range(0, len(v), hop)])
+        ref = np.percentile(rms[rms > 0], 90) if (rms > 0).any() else 1
+        e = np.clip(rms / (ref + 1e-9), 0, 1)
+        e = np.convolve(e, [0.25, 0.5, 0.25], mode="same")
+        e[e < 0.18] = 0
+        lips.append({"speaker": d["speaker"], "at": d["at"], "env": [round(float(x), 3) for x in e]})
+json.dump({"fps": FPS, "lines": lips}, open(os.path.join(HERE, "audio", "lipsync.json"), "w"))
 
 # ---- master -------------------------------------------------------------------------------
 mix = np.stack([L, R], axis=1)

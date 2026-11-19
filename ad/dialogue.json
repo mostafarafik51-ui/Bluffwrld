@@ -1,0 +1,24 @@
+{
+  "note": "Who says what and when. Read by ad/sound.py (mix) and ad/director-store.js (mouths). speaker null = off screen.",
+  "lines": [
+    { "line": "a_monday",    "speaker": "A",  "at": 0.45,  "gain": 0.75, "pan": 0.25 },
+    { "line": "c_really",    "speaker": "C",  "at": 2.2,   "gain": 0.75, "pan": 0.15 },
+    { "line": "b_wait",      "speaker": "B",  "at": 4.05,  "gain": 0.95, "pan": 0.1 },
+    { "line": "b_where",     "speaker": "B",  "at": 5.1,   "gain": 1.0,  "pan": 0.1 },
+    { "line": "a_noway",     "speaker": "A",  "at": 7.45,  "gain": 0.6,  "pan": 0.2 },
+    { "line": "crowd_lets",  "speaker": "C",  "at": 12.45, "gain": 0.55, "pan": 0.3 },
+    { "line": "crowd_move",  "speaker": "x1", "at": 12.95, "gain": 0.4,  "pan": -0.5 },
+    { "line": "crowd_wait",  "speaker": "x3", "at": 13.7,  "gain": 0.35, "pan": 0.6 },
+    { "line": "murmur_00", "speaker": null, "at": 10.9,  "gain": 0.10, "pan": -0.6, "muffle": 3 },
+    { "line": "murmur_01", "speaker": null, "at": 11.15, "gain": 0.14, "pan": 0.5,  "muffle": 3 },
+    { "line": "murmur_02", "speaker": null, "at": 11.4,  "gain": 0.18, "pan": -0.2, "muffle": 3 },
+    { "line": "murmur_03", "speaker": null, "at": 11.6,  "gain": 0.22, "pan": 0.7,  "muffle": 3 },
+    { "line": "murmur_04", "speaker": null, "at": 11.8,  "gain": 0.26, "pan": -0.5, "muffle": 3 },
+    { "line": "murmur_05", "speaker": null, "at": 12.0,  "gain": 0.30, "pan": 0.3,  "muffle": 3 },
+    { "line": "murmur_06", "speaker": null, "at": 12.15, "gain": 0.34, "pan": 0.0,  "muffle": 3 },
+    { "line": "murmur_07", "speaker": null, "at": 16.0,  "gain": 0.07, "pan": -0.3, "muffle": 8 },
+    { "line": "murmur_08", "speaker": null, "at": 16.4,  "gain": 0.07, "pan": 0.3,  "muffle": 8 },
+    { "line": "murmur_09", "speaker": null, "at": 16.9,  "gain": 0.07, "pan": 0.0,  "muffle": 8 },
+    { "line": "murmur_07", "speaker": null, "at": 17.3,  "gain": 0.07, "pan": -0.2, "muffle": 8 }
+  ]
+}

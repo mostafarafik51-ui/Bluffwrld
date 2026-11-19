@@ -12,7 +12,7 @@
 //  18.4  - 21.0  LOGO
 (function ()
 {
-var maskReady = new Promise((ok) => { var im = new Image(); im.onload = ok; im.onerror = ok; im.src = "ad/crowd-headmask.png"; });
+var maskReady = new Promise((ok) => { var im = new Image(); im.onload = () => { window.__headMask = im; ok(); }; im.onerror = ok; im.src = "ad/crowd-headmask.png"; });
 // the men: Ready Player Me's sample avatar from the three.js examples (js/models/man.glb)
 var manReady = new Promise((ok) => require(["three", "gltfLoader"], (THREE) => new THREE.GLTFLoader().load("js/models/man.glb", ok, undefined, () => ok(null))));
 Promise.all([maskReady, manReady]).then((loaded) => { var manGltf = loaded[1]; return manGltf; }).then((manGltf) =>
@@ -95,7 +95,7 @@ require(["three", "player", "renderer", "scene", "camera", "city", "terrain"],
     {
         if (headMaskData) return headMaskData;
         var c = document.createElement("canvas"); c.width = c.height = 1024;
-        var g = c.getContext("2d"); g.drawImage(headMask, 0, 0);
+        var g = c.getContext("2d"); g.drawImage(window.__headMask || headMask, 0, 0);
         headMaskData = g.getImageData(0, 0, 1024, 1024).data;
         return headMaskData;
     };
@@ -111,9 +111,13 @@ require(["three", "player", "renderer", "scene", "camera", "city", "terrain"],
         {
             var r = d[i], gg = d[i + 1], b = d[i + 2], p = hsv(r, gg, b), h = p[0], s = p[1], v = p[2], col = null, k = 1;
             // the sunglasses' white frames live in this corner of the texture
-            // leave the eyes alone (they sit in this corner of the texture)
+            // the sunglasses' frames share this corner of the texture: paint them the frame colour
             var px = (i / 4) % S, py = Math.floor(i / 4 / S);
-            if (px > S * 0.955 && py > S * 0.925) continue;
+            if (px > S * 0.955 && py > S * 0.925)
+            {
+                if (s < 0.25 && v > 0.45) { var fr = rgb(o.frame || "#141210"); var fk = 0.6 + v * 0.4; d[i] = fr[0] * fk; d[i + 1] = fr[1] * fk; d[i + 2] = fr[2] * fk; }
+                continue;
+            }
             if (mask[((py >> 1) * 1024 + (px >> 1)) * 4] > 128 && s < 0.22)
             {
                 var kk = 0.55 + v * 0.6;
@@ -123,7 +127,7 @@ require(["three", "player", "renderer", "scene", "camera", "city", "terrain"],
 
             if (h > 38 && h < 72 && s > 0.4 && v > 0.45) { col = pants; k = v / 0.92; }
             else if (s < 0.2 && v > 0.33 && v < 0.97) { col = top; k = Math.min(1.15, v / 0.7); }
-            else if ((h < 12 || h > 340) && s > 0.55 && v > 0.35) { col = acc; k = v / 0.85; }
+            else if ((h < 12 || h > 340) && s > 0.55 && v > 0.35 && !(mask[((py >> 1) * 1024 + (px >> 1)) * 4] > 128)) { col = acc; k = v / 0.85; }   // lenses, not lips
             else if (h > 8 && h < 40 && s > 0.25 && s < 0.82 && v > 0.16 && v < 0.82)
             {
                 d[i] = Math.min(255, r * o.skin); d[i + 1] = Math.min(255, gg * o.skin * 0.98); d[i + 2] = Math.min(255, b * o.skin * 0.95);
@@ -140,18 +144,19 @@ require(["three", "player", "renderer", "scene", "camera", "city", "terrain"],
         mat.map = tex;
         // no metallic sheen: it turns darker skin silver
         mat.metalness = 0; mat.metalnessMap = null; mat.roughnessMap = null; mat.roughness = 0.85;
+        mat.normalMap = null;            // her surface-detail map still carries the sunglasses' shape
         return mat;
     };
     var OUTFITS =
     [
-        { pants : "#6E6B4E", top : "#e8e3d8", acc : "#12110F", skin : 1.55 },                       // 0 light skin, olive cargo
-        { pants : "#12110F", top : "#B6521F", acc : "#6E6B4E", skin : 0.62 },                       // 1 deep skin, all black + rust
-        { pants : "#3E6FA3", top : "#1c1b19", acc : "#ff4e00", skin : 1.2 },                        // 2 tan, denim blue
-        { pants : "#9A968B", top : "#56467F", acc : "#6E6B4E", skin : 0.85 },                       // 3 brown, grey + violet
-        { pants : "#B6521F", top : "#141312", acc : "#3E6FA3", skin : 1.75 },                       // 4 pale, rust pants
-        { pants : "#D8CFBE", top : "#2f5a36", acc : "#B6521F", skin : 0.72 },                       // 5 dark, beige + forest
-        { pants : "#1a1917", top : "#c22a1e", acc : "#ff4e00", skin : 1.35 },                       // 6 light-tan, black + red
-        { pants : "#56467F", top : "#e9b949", acc : "#12110F", skin : 1.0 },                        // 7 mid, violet + mustard
+        { pants : "#6E6B4E", top : "#e8e3d8", acc : "#1a1410", frame : "#7a4a24", skin : 1.55 },     // 0 light skin, olive cargo, tortoiseshell
+        { pants : "#12110F", top : "#B6521F", acc : "#0d0d0f", frame : "#0d0d0f", skin : 0.62 },     // 1 deep skin, all black + rust
+        { pants : "#3E6FA3", top : "#1c1b19", acc : "#16263a", frame : "#c9c4ba", skin : 1.2 },      // 2 tan, denim blue, smoky blue lenses
+        { pants : "#9A968B", top : "#56467F", acc : "#2a1a12", frame : "#2a1a12", skin : 0.85 },     // 3 brown, grey + violet
+        { pants : "#B6521F", top : "#141312", acc : "#101010", frame : "#e8e3d8", skin : 1.75 },     // 4 pale, rust pants, white frames
+        { pants : "#D8CFBE", top : "#2f5a36", acc : "#2b1608", frame : "#b08d57", skin : 0.72 },     // 5 dark, beige + forest, gold frames
+        { pants : "#1a1917", top : "#c22a1e", acc : "#0d0d0f", frame : "#0d0d0f", skin : 1.35 },     // 6 light-tan, black + red
+        { pants : "#56467F", top : "#e9b949", acc : "#3a1c10", frame : "#3a1c10", skin : 1.0 },      // 7 mid, violet + mustard
     ].map(outfit);
 
     // ---- hair and headwear, built around each person's head and carried by the Head bone ----
@@ -227,6 +232,7 @@ require(["three", "player", "renderer", "scene", "camera", "city", "terrain"],
         return g;
     };
 
+    var getJSON = (url) => { var x = new XMLHttpRequest(); x.open("GET", url + "?v=" + Date.now(), false); x.send(); return JSON.parse(x.responseText); };
     // the crowd's body: her mesh without the headphones, hair buns and sunglasses
     // (the vertex list comes from ad/crowd-hide.json, worked out from the model's separate pieces)
     var crowdGeometry = (() =>
@@ -242,6 +248,11 @@ require(["three", "player", "renderer", "scene", "camera", "city", "terrain"],
             if (!hidden[idx[i]] && !hidden[idx[i + 1]] && !hidden[idx[i + 2]]) keep.push(idx[i], idx[i + 1], idx[i + 2]);
         }
         geo.setIndex(keep);
+        // a jaw-drop shape (ad/crowd-jaw.json): chin and lower lip move down when they talk
+        var jaw = getJSON("ad/crowd-jaw.json"), base = geo.attributes.position, target = new Float32Array(base.array);
+        jaw.vertices.forEach((v, i) => { target[v * 3 + 1] += jaw.dy[i]; target[v * 3 + 2] += jaw.dz[i]; });
+        geo.morphAttributes.position = [new THREE.Float32BufferAttribute(target, 3)];
+        geo.userData.jaw = jaw;
         return geo;
     })();
 
@@ -293,18 +304,29 @@ require(["three", "player", "renderer", "scene", "camera", "city", "terrain"],
         return t;
     };
     var MAN_HEIGHT = 1.87, HER_HEIGHT = 0.95;
+    // her real standing height in the world, measured from her skeleton
+    var herTrue = null;
+    var HER = () => herTrue || (herTrue = (() =>
+    {
+        var h = Player.threeObj;
+        poseWith(Player.animator.mixer, (() => { var a = {}; Object.keys(Player.animator.animation_data).forEach((k) => { a[k] = Player.animator.animation_data[k].action; }); return a; })(), [["Idle", 0, 1]]);
+        h.updateMatrixWorld(true);
+        return worldOf(h.getObjectByName("mixamorigHeadTop_End")).z - h.position.z;
+    })());
     var man = (o) =>
     {
         var root = cloneSkinned(manGltf.scene);
         var tint = (hex, k) => new THREE.Color(hex).convertSRGBToLinear().multiplyScalar(k || 1);
+        var talkers = [];
         root.traverse((n) =>
         {
             if (!n.isMesh) return;
             n.frustumCulled = false;
+            if (n.morphTargetDictionary && n.morphTargetDictionary.mouthOpen !== undefined) talkers.push(n);
             var m = n.material.clone();
             var part = n.material.name;
             if (part == "Wolf3D_Headwear") n.visible = false;                          // the fedora goes
-            else if (part == "Wolf3D_Beard") { n.visible = !!o.beard; m.color = tint(o.hairColourHex || "#2a1d14"); }
+            else if (part == "Wolf3D_Beard") n.visible = false;                         // no moustache
             else if (part == "Wolf3D_Skin" || part == "Wolf3D_Body") m.color = new THREE.Color(o.skin, o.skin * 0.97, o.skin * 0.93);
             else if (part == "Wolf3D_Outfit_Top") { m.map = greyMap(m.map); m.color = tint(o.top); }
             else if (part == "Wolf3D_Outfit_Bottom") { m.map = greyMap(m.map); m.color = tint(o.pants); }
@@ -321,8 +343,14 @@ require(["three", "player", "renderer", "scene", "camera", "city", "terrain"],
         Object.keys(manClips).forEach((c) => { actions[c] = mixer.clipAction(manClips[c]); });
         poseWith(mixer, actions, [["Idle", 0, 1]]);
         root.updateMatrixWorld(true);
+        // match his height to hers (the two models are built at different scales)
+        var heightOf = (r, pre) => { r.updateMatrixWorld(true); return worldOf(r.getObjectByName(pre + "HeadTop_End")).z - r.position.z; };
+        var fix = HER() * (o.size || 1) * build[1] * 1.06 / heightOf(root, "");
+        root.scale.multiplyScalar(fix);
+        root.updateMatrixWorld(true);
         if (o.hairStyle) dressHead(root, o.hairStyle, o.hairColour || "black", o.hat, "");
-        var p = Object.assign({ root : root, mixer : mixer, actions : actions, bone : (b) => root.getObjectByName(b) }, o);
+        var p = Object.assign({ root : root, mixer : mixer, actions : actions, bone : (b) => root.getObjectByName(b),
+            mouth : (v) => talkers.forEach((m) => { m.morphTargetInfluences[m.morphTargetDictionary.mouthOpen] = v * 0.9; }) }, o);
         people.push(p);
         return p;
     };
@@ -334,7 +362,13 @@ require(["three", "player", "renderer", "scene", "camera", "city", "terrain"],
         var root = cloneSkinned(Player.threeObj);
         var bag = root.getObjectByName("BluffBag");      // only she has the bag
         if (bag) bag.parent.remove(bag);
-        root.traverse((n) => { if (n.isSkinnedMesh) { n.material = OUTFITS[o.look]; n.frustumCulled = false; if (o.hairStyle) n.geometry = crowdGeometry; } });
+        var body = null;
+        root.traverse((n) =>
+        {
+            if (!n.isSkinnedMesh) return;
+            n.material = OUTFITS[o.look]; n.frustumCulled = false;
+            if (o.hairStyle) { n.geometry = crowdGeometry; n.material.morphTargets = true; n.updateMorphTargets(); body = n; }
+        });
         // build: [width, height] of the body
         var build = o.build || [1, 1];
         root.scale.set((o.size || 1) * build[0], (o.size || 1) * build[1], (o.size || 1) * build[0]);
@@ -342,10 +376,27 @@ require(["three", "player", "renderer", "scene", "camera", "city", "terrain"],
         // dress the head in her current pose, so the hair sits on it
         root.position.copy(Player.threeObj.position); root.rotation.copy(Player.threeObj.rotation);
         if (o.hairStyle) dressHead(root, o.hairStyle, o.hairColour || "black", o.hat);
+        // the inside of the mouth: a dark shape behind the lips, seen when the jaw drops
+        if (body)
+        {
+            root.updateMatrixWorld(true);
+            var jaw = crowdGeometry.userData.jaw;
+            // a frame that turns her mesh's coordinates into the head bone's: boneInverse x bindMatrix
+            var head = root.getObjectByName("mixamorigHead"), hi = body.skeleton.bones.indexOf(head);
+            var frame = new THREE.Group();
+            frame.matrixAutoUpdate = false;
+            frame.matrix.multiplyMatrices(body.skeleton.boneInverses[hi], body.bindMatrix);
+            head.add(frame);
+            var inner = new THREE.Mesh(new THREE.CircleBufferGeometry(1, 20), new THREE.MeshBasicMaterial({ color : new THREE.Color("#2a0c08").convertSRGBToLinear() }));
+            inner.position.set(jaw.mouth[0], jaw.mouth[1], jaw.mouth[2]);   // just behind the lips, on the crease
+            inner.scale.set(0.0115, 0.0062, 1);
+            frame.add(inner);
+        }
         var mixer = new THREE.AnimationMixer(root), actions = {};
         Object.keys(clips).forEach((k) => { actions[k] = mixer.clipAction(clips[k]); });
         var p = Object.assign({ root : root, mixer : mixer, actions : actions,
-            bone : (n) => root.getObjectByName("mixamorig" + n) }, o);
+            bone : (n) => root.getObjectByName("mixamorig" + n),
+            mouth : (v) => { if (body) body.morphTargetInfluences[0] = v; } }, o);
         people.push(p);
         return p;
     };
@@ -412,28 +463,52 @@ require(["three", "player", "renderer", "scene", "camera", "city", "terrain"],
 
     var A = person({ name : "A", look : 0, size : 1.02, build : [1.0, 1.04], hairStyle : "long", hairColour : "blonde", p0 : at(0.15, 0.58), lane : 0.9, start : 12.55, idle : "IdleRelax", off : 1.3 });
     var B = person({ name : "B", look : 2, size : 0.97, build : [0.96, 1.0], hairStyle : "bun", hairColour : "brown", p0 : at(3.3, 0.55), lane : -0.4, start : 12.42, idle : "Idle", off : 0.4 });
-    var C = person({ name : "C", man : true, beard : true, skin : 0.55, top : "#B6521F", pants : "#12110F", shoes : "#e8e3d8", look : 1, size : 1.08, build : [1.08, 1.0], hairStyle : "cap", hat : "#ff4e00", p0 : at(2.0, 0.56), lane : 0.3, start : 12.5, idle : "Idle", off : 1.1 });
+    var C = person({ name : "C", man : true, skin : 0.55, top : "#B6521F", pants : "#12110F", shoes : "#e8e3d8", look : 1, size : 1.08, build : [1.08, 1.0], hairStyle : "cap", hat : "#ff4e00", p0 : at(2.0, 0.56), lane : 0.3, start : 12.5, idle : "Idle", off : 1.1 });
     [A, B, C].forEach((p) => { p.yaw0 = yawTo(p.p0, CIRCLE); p.friend = true; });
     var extras =
     [
         { man : true, skin : 0.42, top : "#2f5a36", pants : "#1a1917", look : 3, size : 1.06, build : [1.1, 1.0], hairStyle : "buzz", hairColour : "black", p0 : V(3.45, 12.7, Z0), yaw0 : Math.PI,        lane : 1.0,  start : 12.6,  idle : "Idle",      off : 0.2 },
         { look : 4, size : 0.95, build : [0.92, 0.97], hairStyle : "crop", hairColour : "auburn", p0 : V(-3.3, 13.9, Z0), yaw0 : 0.5,            lane : -1.2, start : 12.75, idle : "IdleRelax", off : 3.0 },
-        { man : true, beard : true, skin : 0.95, top : "#56467F", pants : "#9A968B", look : 5, size : 1.04, build : [1.15, 1.0], hairStyle : "beanie", hat : "#e9b949", hairColourHex : "#7a4a24", p0 : V(-2.95, 14.75, Z0), yaw0 : -2.4,         lane : -0.8, start : 12.8,  idle : "Idle",      off : 1.6 },
+        { man : true, skin : 0.95, top : "#56467F", pants : "#9A968B", look : 5, size : 1.04, build : [1.15, 1.0], hairStyle : "beanie", hat : "#e9b949", hairColourHex : "#7a4a24", p0 : V(-2.95, 14.75, Z0), yaw0 : -2.4,         lane : -0.8, start : 12.8,  idle : "Idle",      off : 1.6 },
         { look : 6, size : 0.99, build : [1.0, 0.98], hairStyle : "braids", hairColour : "black", p0 : V(3.25, 16.6, Z0), yaw0 : -2.7,           lane : 0.6,  start : 12.9,  idle : "IdleRelax", off : 5.0 },
-        { man : true, beard : true, skin : 0.75, top : "#12110F", pants : "#3E6FA3", look : 7, size : 1.08, build : [1.05, 1.0], hairStyle : "crop", hairColour : "brown", hairColourHex : "#3a2616", p0 : V(-6.6, 2.0, Z0),  yaw0 : 0.2,            lane : -0.1, start : 12.6,  idle : "Idle",      off : 0.9 },
+        { man : true, skin : 0.75, top : "#12110F", pants : "#3E6FA3", look : 7, size : 1.08, build : [1.05, 1.0], hairStyle : "crop", hairColour : "brown", hairColourHex : "#3a2616", p0 : V(-6.6, 2.0, Z0),  yaw0 : 0.2,            lane : -0.1, start : 12.6,  idle : "Idle",      off : 0.9 },
         { look : 0, size : 0.96, build : [0.95, 0.95], hairStyle : "afro", hairColour : "dyed", p0 : V(6.2, 1.4, Z0),   yaw0 : 2.9,            lane : 0.45, start : 12.7,  idle : "Idle",      off : 0.5 },
         { man : true, skin : 0.6, top : "#e8e3d8", pants : "#6E6B4E", look : 5, size : 1.0, build : [1.0, 1.0], hairStyle : "cap", hat : "#3E6FA3", p0 : V(-4.6, 5.6, Z0),  yaw0 : -0.3,           lane : -1.0, start : 12.65, idle : "IdleRelax", off : 7.0 },
-    ].map(person);
+    ].map((o, i) => person(Object.assign({ name : "x" + i }, o)));
     var crowd = [A, B, C].concat(extras);
 
+    // ---- mouths: driven by the loudness of each speaker's voice line (ad/audio/lipsync.json) ----
+    var LIPS = getJSON("ad/audio/lipsync.json");
+    var lipOf = (who, t) =>
+    {
+        var v = 0;
+        LIPS.lines.forEach((l) =>
+        {
+            if (l.speaker !== who) return;
+            var f = Math.floor((t - l.at) * LIPS.fps);
+            if (f >= 0 && f < l.env.length) v = Math.max(v, l.env[f]);
+        });
+        return v;
+    };
+
     // ---- the run to the store ---------------------------------------------------------------
-    var RUNV = 4.2, DOOR_Y = 26.7, INSIDE_Y = 31.5;
+    var RUNV = 4.2, DOOR_Y = 26.7, WALKV = 1.1, SLOW = 1.8;
+    // where each of them ends up inside the store, and what they look at there
+    var SPOTS =
+    {
+        A  : [-9.0, 30.0, -11, 30.0],  B  : [-9.2, 32.7, -11, 32.7], C  : [-1.9, 32.1, 0, 33.5],
+        x0 : [ 1.9, 32.0,  0, 33.5],   x1 : [-9.0, 35.4, -11, 35.4], x2 : [ 5.6, 30.0, 7.1, 29.6],
+        x3 : [ 5.8, 33.3, 7.1, 33.0],  x4 : [ 0.9, 37.0,  0, 38.9],  x5 : [-1.3, 36.0, 0, 33.5],
+        x6 : [ 6.1, 36.6, 8.0, 36.6],
+    };
     crowd.forEach((p) =>
     {
         // a path: off their spot, onto their lane of the main street, through the door, inside
         var pts = [p.p0.clone()];
         if (Math.abs(p.p0.x) > 3) pts.push(V(p.lane * 1.4, Math.max(p.p0.y + 1.5, 4.5), Z0));
-        pts.push(V(p.lane, 18, Z0), V(p.lane * 0.8, DOOR_Y, Z0), V(p.lane * 0.5, INSIDE_Y, Z0));
+        var spot = SPOTS[p.name];
+        pts.push(V(p.lane, 18, Z0), V(p.lane * 0.7, DOOR_Y - 0.6, Z0), V(p.lane * 0.4, DOOR_Y + 1.2, Z0), V(spot[0], spot[1], Z0));
+        p.spot = spot;
         var len = [0];
         for (var i = 1; i < pts.length; i++) len.push(len[i - 1] + pts[i].distanceTo(pts[i - 1]));
         p.path = pts; p.len = len;
@@ -530,6 +605,7 @@ require(["three", "player", "renderer", "scene", "camera", "city", "terrain"],
     {
         crowd.forEach((p, i) =>
         {
+            p.mouth(Math.min(1, Math.pow(lipOf(p.name, t), 0.75)));
             var off = p.off || 0;
             if (t < p.start)
             {
@@ -554,12 +630,33 @@ require(["three", "player", "renderer", "scene", "camera", "city", "terrain"],
             }
             else
             {
-                var dt = t - p.start, dist = RUNV * Math.max(0, dt - 0.18 * (1 - Math.exp(-dt / 0.18)));
+                var dt = t - p.start, total = p.len[p.len.length - 1], runEnd = total - SLOW;
+                var runDist = RUNV * Math.max(0, dt - 0.18 * (1 - Math.exp(-dt / 0.18)));
+                var dist, mode;
+                if (runDist < runEnd) { dist = runDist; mode = "run"; }
+                else
+                {
+                    // when did the run reach the slow-down point? solve roughly, then walk the rest
+                    var tRun = runEnd / RUNV + 0.18;
+                    dist = Math.min(total, runEnd + WALKV * (dt - tRun));
+                    mode = dist >= total ? "stand" : "walk";
+                }
                 var a = along(p, dist);
-                p.root.visible = !a.done;
-                var yaw2 = mix(p.yaw0, p.yaw0 + wrap(a.yaw - p.yaw0), ease(lin(dt, 0, 0.3)));
-                place(p.root, a.pos.x, a.pos.y, yaw2);
-                poseWith(p.mixer, p.actions, [["Run", dt * 1.15 + off, 1]]);
+                p.root.visible = true;
+                var moveYaw = mix(p.yaw0, p.yaw0 + wrap(a.yaw - p.yaw0), ease(lin(dt, 0, 0.3)));
+                if (mode == "stand")
+                {
+                    var lookYaw = Math.atan2(p.spot[3] - p.spot[1], p.spot[2] - p.spot[0]);
+                    var arrive = (dt - (runEnd / RUNV + 0.18) - SLOW / WALKV);
+                    place(p.root, p.spot[0], p.spot[1], mix(moveYaw, moveYaw + wrap(lookYaw - moveYaw), ease(lin(arrive, 0, 0.6))));
+                    poseWith(p.mixer, p.actions, [[p.idle, arrive + off, 1]]);
+                }
+                else
+                {
+                    place(p.root, a.pos.x, a.pos.y, moveYaw);
+                    if (mode == "run") poseWith(p.mixer, p.actions, [["Run", dt * 1.15 + off, 1]]);
+                    else poseWith(p.mixer, p.actions, [["Walk", dt + off, 1]]);
+                }
             }
         });
     };
