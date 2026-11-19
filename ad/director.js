@@ -3,12 +3,14 @@
 // world into a film set: every frame is a pure function of the time t (seconds), so
 // frames can be rendered in any order and by several browsers at once.
 //
-// Shots (16 s, vertical 9:16):
-//   0.0  -  3.2  STREET   she walks up the main street, leaving orange footprints
-//   3.2  -  6.4  THE BAG  close on her back, callout lines draw onto the bag
-//   6.4  - 10.4  RING     an orange ring blasts from her feet, she breaks into a breakdance
-//  10.4  - 13.4  REVEAL   the camera cranes overhead as the logo paints itself around her
-//  13.4  - 16.0  LOGO     the logo alone
+// No words, no product talk: a run of action that hooks the viewer, then the logo.
+// Shots (15 s, vertical 9:16):
+//   0.0  -  1.6  DROP     she falls out of the sky and slams onto the street
+//   1.6  -  3.6  SPRINT   she runs up the main street, camera tracking alongside
+//   3.6  -  5.5  LEAP     a huge jump over the camera, slow motion in the middle
+//   5.5  -  9.4  DANCE    she lands in the roundabout and breaks into a breakdance
+//   9.4  - 12.4  REVEAL   the camera cranes overhead: she is dancing on the logo
+//  12.4  - 15.0  LOGO     the logo alone
 (function ()
 {
 require(["three", "player", "renderer", "scene", "camera", "city", "terrain"],
@@ -19,7 +21,7 @@ require(["three", "player", "renderer", "scene", "camera", "city", "terrain"],
     var MARK = "'Permanent Marker', 'Arial Black', sans-serif";
     var MONO = "'IBM Plex Mono', 'Courier New', monospace";
     var W = window.innerWidth, H = window.innerHeight;
-    var DURATION = 16.0;
+    var DURATION = 15.0;
 
     // ---- stop the game and clear its interface ----------------------------------------
     window.requestAnimationFrame = () => 0;
@@ -244,98 +246,153 @@ require(["three", "player", "renderer", "scene", "camera", "city", "terrain"],
         }
     };
 
+    // ---- motion helpers ----------------------------------------------------------------------
+    // camera shake after an impact at time t0
+    var shake = (t, t0, amount) =>
+    {
+        var a = t - t0;
+        if (a < 0 || a > 0.6) return V(0, 0, 0);
+        var k = amount * Math.pow(1 - a / 0.6, 2);
+        return V(Math.sin(a * 91) * k, Math.cos(a * 77) * k * 0.6, Math.sin(a * 113 + 1) * k);
+    };
+    // dust burst on the ground at (x, y) starting at t0
+    var burst = (t, t0, x, y, size) =>
+    {
+        [[0, 1.0, 0.9], [0.08, 1.5, 0.6], [0.16, 2.0, 0.4]].forEach((s, i) =>
+        {
+            var p = lin(t, t0 + s[0], t0 + s[0] + 0.7);
+            if (p <= 0 || p >= 1) return;
+            var r = Math.max(0.05, size * s[1] * easeOut(p));
+            rings[i].scale.set(r, r, 1);
+            rings[i].position.set(x, y, Z0 + 0.05 + i * 0.002);
+            rings[i].material.color.set(new THREE.Color(CREAM).convertSRGBToLinear());
+            rings[i].material.opacity = s[2] * (1 - p);
+        });
+        var g = lin(t, t0, t0 + 0.5);
+        if (g > 0 && g < 1)
+        {
+            var gr = size * (0.8 + 3 * easeOut(g));
+            glowDisc.scale.set(gr, gr, 1);
+            glowDisc.position.set(x, y, Z0 + 0.045);
+            glowDisc.material.opacity = 0.7 * (1 - g);
+        }
+    };
+    var flashes = [];      // [time, strength]
+    var aim = (pos, target, jolt) =>
+    {
+        camera.position.copy(pos).add(jolt || V(0, 0, 0));
+        camera.lookAt(target);
+    };
+
+    // the run and the leap share one path up the main street
+    var RUN = 3.7, RUN_T0 = 1.6, RUN_Y0 = -14.0;
+    var runY = (t) => RUN_Y0 + RUN * (t - RUN_T0);
+    var TAKEOFF = 3.9, LANDING = 5.5;
+    var leap = (t) =>
+    {
+        // speed ramp: quick off the ground, slow at the top, quick into the landing
+        var x = lin(t, TAKEOFF, LANDING);
+        var s = x - 0.6 * Math.sin(2 * Math.PI * x) / (2 * Math.PI);
+        var y0 = runY(TAKEOFF);
+        return { s : s, pos : V(mix(0.62, 0, s), mix(y0, 0, s), Z0 + 0.02 + 4 * 2.1 * s * (1 - s)) };
+    };
+
     // ---- the frame -------------------------------------------------------------------------
     var frame = (t, frameNo) =>
     {
         ctx.clearRect(0, 0, W, H);
         renderer.domElement.style.visibility = "visible";
-
-        // world animation that would normally tick on its own
         City.spinners.forEach((s, i) => { s.rotation.z = i * 1.3 + t * 0.6; });
 
-        // defaults
         prints.forEach((m) => { m.material.opacity = 0; });
         rings.forEach((m) => { m.material.opacity = 0; });
         glowDisc.material.opacity = 0;
         paintLogo(0, 0);
         camera.up.set(0, 0, 1);
+        var flash = 0;
 
-        if (t < 6.4)
+        if (t < 1.6)
         {
-            // ---- STREET + THE BAG: walking north ------------------------------------------
-            var pos = walkPos(t);
-            place(pos.x, pos.y, 0, 1);
-            pose([["Walk", t, 1]]);
+            // ---- DROP -----------------------------------------------------------------
+            var LAND = 0.62, x = 0.62, y = RUN_Y0;
+            var z = t < LAND ? Z0 + 0.02 + 5.0 * (1 - Math.pow(t / LAND, 2)) : Z0 + 0.02;
+            hero.position.set(x, y, z);
+            hero.rotation.set(Math.PI / 2, Math.atan2(0, -1), 0);
+            hero.updateMatrixWorld(true);
+            if (t < LAND) pose([["FallIdle", t, 1]]);
+            else pose([["FallToLand", Math.min(t - LAND, 0.76), 1]]);
+            burst(t, LAND, x, y, 0.9);
+            flash = 0.8 * (1 - lin(t, LAND, LAND + 0.12)) * (t >= LAND ? 1 : 0);
+            aim(V(x + 0.9, y + 2.3, Z0 + 0.28), V(x, y, Math.max(z + 0.45, Z0 + 0.5)), shake(t, LAND, 0.09));
+        }
+        else if (t < LANDING)
+        {
+            var airborne = t >= TAKEOFF;
+            var at = airborne ? leap(t).pos : V(0.62, runY(t), Z0 + 0.02);
+            hero.position.copy(at);
+            hero.rotation.set(Math.PI / 2, Math.atan2(0, -1), 0);
+            hero.updateMatrixWorld(true);
+            if (!airborne) pose([["Run", (t - RUN_T0) * 1.1, 1]]);
+            else pose([["FallIdle", (t - TAKEOFF) * 0.6, 1]]);
 
-            // footprints left behind, alternating feet
-            prints.forEach((m, k) =>
+            if (t < 3.6)
             {
-                var ts = PRINT_START + k * STEP, age = t - ts;
-                if (age < 0) return;
-                var at = walkPos(ts);
-                m.position.set(at.x + (k % 2 ? 0.1 : -0.1), at.y + 0.05, Z0 + 0.04);
-                m.material.opacity = clamp(1 - age / 6.5, 0, 1) * clamp(age / 0.12, 0, 1);
-            });
-
-            if (t < 3.2)
+                // ---- SPRINT: alongside her, a little ahead, low --------------------------------
+                var bob = Math.sin((t - RUN_T0) * 2 * Math.PI / 0.335) * 0.025;
+                aim(V(at.x + 2.3, at.y + 2.0, Z0 + 0.5 + bob), V(at.x - 0.2, at.y + 0.2, Z0 + 0.6));
+            }
+            else
             {
-                // low, in front of her, slowly pulling back
-                var a = lin(t, 0, 3.2);
-                camera.position.set(pos.x + 0.55 - 0.25 * a, pos.y + 2.5 + 0.35 * ease(a), Z0 + 0.62 + 0.14 * a);
-                camera.lookAt(V(pos.x, pos.y, Z0 + 0.62));
-            } else
-            {
-                // close behind her left shoulder, pushing in on the bag
-                var b = lin(t, 3.2, 6.4), back = worldOf(bone("Spine1"));
-                camera.position.set(pos.x - 0.95 + 0.35 * ease(b), pos.y - 1.45 + 0.4 * ease(b), Z0 + 0.95 - 0.05 * b);
-                camera.lookAt(back.clone().add(V(0.0, 0.0, 0.03)));
+                // ---- LEAP: the camera sits on the road facing her (south, away from the store);
+                // she comes flying at it and lands just in front
+                var cam = V(0.35, 2.7, Z0 + 0.16);
+                aim(cam, V(at.x, at.y, at.z + 0.55));
             }
         }
-        else if (t < 13.4)
+        else if (t < 12.4)
         {
-            // ---- RING + REVEAL: at the roundabout ---------------------------------------------
-            place(0, 0, 0, -1);
-            var dance = t - 7.35;
-            if (dance < 0) pose([["Idle", t - 6.4, 1]]);
-            else if (dance < 0.35) pose([["Idle", t - 6.4, 1 - dance / 0.35], ["BreakDance", dance, dance / 0.35]]);
-            else pose([["BreakDance", dance, 1]]);
+            // ---- DANCE + REVEAL: in the roundabout --------------------------------------------
+            hero.position.set(0, 0, Z0 + 0.02);
+            hero.rotation.set(Math.PI / 2, Math.atan2(0, -1), 0);
+            hero.updateMatrixWorld(true);
+            var land = t - LANDING, d0 = 0.42;
+            if (land < d0) pose([["FallToLand", land, 1]]);
+            else if (land < d0 + 0.25) pose([["FallToLand", land, 1 - (land - d0) / 0.25], ["BreakDance", land - d0, (land - d0) / 0.25]]);
+            else pose([["BreakDance", land - d0, 1]]);
+            burst(t, LANDING, 0, 0, 1.3);
+            flash = 0.7 * (1 - lin(t, LANDING, LANDING + 0.12)) * (t >= LANDING ? 1 : 0);
+            var jolt = shake(t, LANDING, 0.07);
+            var focus = V(0, 0, Z0 + 0.45);
 
-            // the ring: one shockwave that stays as the logo's ring, two echoes
-            var R = 7 * K;
-            [[7.05, R, 0.95, 1.0], [7.2, R * 1.45, 0.7, 0.9], [7.38, R * 1.9, 0.5, 0.8]].forEach((s, i) =>
+            if (t < 6.9)
             {
-                var p = lin(t, s[0], s[0] + s[3]);
-                if (p <= 0) return;
-                var r = Math.max(0.05, s[1] * easeOut(p));
-                rings[i].scale.set(r, r, 1);
-                rings[i].position.set(0, 0, Z0 + 0.05 + i * 0.002);
-                rings[i].material.opacity = i == 0 ? s[2] : s[2] * (1 - p);
-            });
-            var g = lin(t, 7.0, 7.9);
-            if (g > 0 && g < 1)
-            {
-                var gr = 1 + 9 * easeOut(g);
-                glowDisc.scale.set(gr, gr, 1);
-                glowDisc.position.set(0, 0, Z0 + 0.045);
-                glowDisc.material.opacity = 0.85 * (1 - g);
+                // from where the leap camera was, swing round her (staying on the north side,
+                // so the store stays behind the camera)
+                var c = lin(t, LANDING, 6.9), ang = mix(1.45, 2.25, ease(c)), rad = mix(2.7, 3.0, c);
+                aim(V(Math.cos(ang) * rad, Math.sin(ang) * rad, Z0 + mix(0.16, 0.7, c)), focus, jolt);
             }
-
-            var head = worldOf(bone("Spine2"));
-            if (t < 10.4)
+            else if (t < 8.1)
             {
-                // orbit while she dances
-                var c = lin(t, 6.4, 10.4), ang = mix(-2.35, -0.75, ease(c)), rad = mix(3.2, 4.3, c);
-                camera.position.set(Math.cos(ang) * rad, Math.sin(ang) * rad, Z0 + mix(0.9, 1.45, c));
-                camera.lookAt(V(0, 0, Z0 + 0.45));
-            } else
+                // cut: close and high, spinning the other way
+                var c2 = lin(t, 6.9, 8.1), ang2 = mix(1.9, 0.9, c2);
+                aim(V(Math.cos(ang2) * 1.7, Math.sin(ang2) * 1.7, Z0 + 1.9), V(0, 0, Z0 + 0.25));
+                flash = Math.max(flash, 0.35 * (1 - lin(t, 6.9, 6.97)));
+            }
+            else if (t < 9.4)
             {
-                // crane straight up and look down on the logo she is standing in
-                var lt = lin(t, 10.4, 12.9), d = ease(lt), up = easeOut(lt);
-                var ang2 = -0.75, rad2 = mix(4.3, 0.02, d);
-                camera.position.set(Math.cos(ang2) * rad2, Math.sin(ang2) * rad2, Z0 + mix(1.45, 13.5, up));
+                // cut: right on the ground, wide
+                var c3 = lin(t, 8.1, 9.4), ang3 = mix(3.6, 3.95, c3);
+                aim(V(Math.cos(ang3) * 4.3, Math.sin(ang3) * 4.3, Z0 + 0.14), V(0, 0, Z0 + 0.55));
+                flash = Math.max(flash, 0.35 * (1 - lin(t, 8.1, 8.17)));
+            }
+            else
+            {
+                // crane straight up: she has been dancing on the logo all along
+                var lt = lin(t, 9.4, 11.9), d = ease(lt), rise = easeOut(lt), ang4 = 3.95, rad4 = mix(4.3, 0.02, d);
+                camera.position.set(Math.cos(ang4) * rad4, Math.sin(ang4) * rad4, Z0 + mix(0.14, 13.5, rise));
                 camera.up.set(0, 0, 1).lerp(V(0, 1, 0), d).normalize();
-                camera.lookAt(V(0, 0, Z0 + mix(0.45, 0, d)));
-                paintLogo(easeOut(lin(t, 10.7, 12.4)), 1);
+                camera.lookAt(V(0, 0, Z0 + mix(0.55, 0, d)));
+                paintLogo(easeOut(lin(t, 10.9, 12.1)), 1);
             }
         }
         else
@@ -343,53 +400,21 @@ require(["three", "player", "renderer", "scene", "camera", "city", "terrain"],
             // ---- LOGO ---------------------------------------------------------------------
             renderer.domElement.style.visibility = "hidden";
             ctx.fillStyle = WASHED; ctx.fillRect(0, 0, W, H);
-            var e = lin(t, 13.5, 14.35), size = W * 0.6 * mix(0.94, 1, easeOut(e));
+            var e = lin(t, 12.5, 13.3), size = W * 0.6 * mix(0.94, 1, easeOut(e));
             if (City.logo_image && e > 0)
             {
                 var tmp = document.createElement("canvas"); tmp.width = tmp.height = Math.round(size);
                 City.drawLogo(tmp.getContext("2d"), City.logo_image, 0, 0, size, CREAM);
-                var visible = size * easeOut(e);           // paints in from the bottom
+                var visible = size * easeOut(e);
                 ctx.drawImage(tmp, 0, size - visible, size, visible, (W - size) / 2, H * 0.46 - size / 2 + (size - visible), size, visible);
             }
             return;
         }
 
-        // world camera done: let the terrain follow it, then draw
         camera.updateMatrixWorld(true);
         Terrain.update();
         renderer.render(scene, camera);
-
-        // ---- type and graphics over the picture ----------------------------------------------
-        if (t < 3.2)
-        {
-            monoText("MONDAY  08:59", 70, 140, 30, lin(t, 0.2, 0.5) * (1 - lin(t, 2.9, 3.15)), CREAM);
-            monoText("BLUFF / BATCH 01", W - 70, 140, 30, lin(t, 0.35, 0.65) * (1 - lin(t, 2.9, 3.15)), ORANGE, "right");
-            var out = 1 - lin(t, 2.85, 3.15);
-            bigText([typed("lower your", t, 0.55, 16)], 70, H * 0.78, 128, out);
-            bigText([typed("voice.", t, 1.25, 12)], 70, H * 0.78 + 130, 128, out, ORANGE);
-        }
-        else if (t < 6.4)
-        {
-            var strap = screenOf(worldOf(bone("RightShoulder")).add(V(0, -0.04, 0.02)));
-            var pouch = screenOf(worldOf(bone("Spine")).add(V(-0.06, -0.08, -0.02)));
-            var zip = screenOf(worldOf(bone("Spine1")).add(V(0.02, -0.09, 0.05)));
-            callout(pouch, -1, -260, "THE CRESCENT", "AUTONOMOUS CARRY RELEASE", t, 3.55);
-            callout(strap, 1, -150, "BATCH 01", "ONE WIDE STRAP. NO EXPLANATION.", t, 4.25);
-            callout(zip, 1, 300, "900 EGP", "FREE DELIVERY", t, 4.95);
-            monoText("THE INSIDE? NOT OUR THING.", W / 2, H - 150, 28, lin(t, 5.4, 5.7), CREAM, "center");
-        }
-        else if (t < 10.4)
-        {
-            var flash = 1 - lin(t, 7.05, 7.35);
-            if (t > 7.05 && flash > 0) { ctx.fillStyle = "rgba(255,120,40," + 0.35 * flash + ")"; ctx.fillRect(0, 0, W, H); }
-            var o = lin(t, 7.9, 8.2) * (1 - lin(t, 10.05, 10.35));
-            bigText(["loud is"], W / 2, H * 0.17, 140, o, CREAM, "center");
-            bigText(["a bluff."], W / 2, H * 0.17 + 145, 140, o * lin(t, 8.3, 8.5), ORANGE, "center");
-        }
-        else
-        {
-            monoText("NOTHING TO PROVE.", W / 2, H - 170, 34, lin(t, 12.4, 12.8), CREAM, "center", 8);
-        }
+        if (flash > 0) { ctx.fillStyle = "rgba(255,250,240," + flash + ")"; ctx.fillRect(0, 0, W, H); }
         finish(t, frameNo);
     };
 
